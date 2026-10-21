@@ -53,6 +53,13 @@ Turn on *Draw on screen* in Settings and Clicky also marks up the screen like a 
   <em>Asked "What is the mistake in this question?" on a thermodynamics worksheet.</em>
 </p>
 
+## Guided steps, acting for you, Hebrew
+
+- **One step at a time.** Ask for something that takes several clicks and Clicky gives the first step, points at it, and waits. Press `Ctrl+Alt+Enter` (or say *"next"*, *"done"*, *"הבא"*) when you've done it: Clicky takes a fresh screenshot, checks that the step worked, and gives the next one. Turn it off in Settings (*Guide me step by step*).
+- **Let Clicky do it.** With *Act for me* set to *Ask first*, Clicky can click, type, press keys and run PowerShell commands you ask for. It says what it is about to do and waits for `Ctrl+Alt+Enter`. *Automatic* runs clicks and typing right away and carries on to the next step on its own; a PowerShell command always waits for your `Ctrl+Alt+Enter`. Off by default.
+- **Hebrew.** Pick *עברית* under Language in Settings. Listening (Cartesia ink-2 or local faster-whisper), the voice (Cartesia Sonic-3 or ElevenLabs; the local Kokoro voice has no Hebrew) and the answers switch to Hebrew. Keyboard shortcuts are still named in English.
+- **Claude Opus 5.5.** Under Anthropic, Settings offers Claude Haiku 5.5 (default, fastest and cheapest) and Claude Opus 5.5, the most capable, for tasks that take several steps.
+
 ## Quick install
 
 **Video walkthrough:** [How to install Clicky Windows](https://youtu.be/a76r7sTNGH0) (90 seconds).

@@ -262,6 +262,26 @@ directly. That takes precedence over LLM_PROVIDER because the create_ai_client
 factory dispatches on MODEL_ID prefix first. LLM_PROVIDER is the
 GUI-friendly way for users who don't edit .env."""
 
+LANGUAGE: str = resolve_setting("LANGUAGE", default="en").lower()
+"""Language Clicky listens and speaks in: 'en' (default) or 'he' (Hebrew).
+Picked in Settings. Sets the speech-to-text language, asks the voice for
+Hebrew, and tells the model to answer in Hebrew. Local Kokoro has no Hebrew
+voice; pick Cartesia or ElevenLabs for the voice when using Hebrew."""
+
+STEP_MODE: str = resolve_setting("STEP_MODE", default="on")
+"""Guided steps. When 'on' (default), a task that takes several clicks is
+given one step at a time: Clicky points at the step, and moves to the next
+one when the user confirms (Ctrl+Alt+Enter, or saying "next" / "done" /
+"הבא"). Clicky looks at the screen again before each step, so it can tell
+whether the last one worked. 'off' answers the whole task in one go."""
+
+ACTIONS_MODE: str = resolve_setting("ACTIONS_MODE", default="off")
+"""Acting on the user's behalf. 'off' (default): Clicky only points.
+'confirm': the model may offer to click, type, press keys or run a
+PowerShell command, and does it when the user presses Ctrl+Alt+Enter.
+'auto': clicks, typing and key presses run as soon as the answer is spoken;
+a PowerShell command still waits for Ctrl+Alt+Enter. See actions.py."""
+
 ANNOTATION_MODE: str = resolve_setting("ANNOTATION_MODE", default="off")
 """Draw-on-screen teaching mode. When 'on', the vision
 model is given the annotation system prompt and emits

@@ -133,6 +133,56 @@ _CUT_OFF_POINT_RE = re.compile(r"\s*\[point(?::[^\]]*)?$", re.IGNORECASE)
 _CLICKY_MAX_TOKENS = 1024
 """Token budget matching Clicky's analyzeImageStreaming call."""
 
+# Optional sections appended to the persona prompt by build_system_prompt.
+# Every control tag stays in English with digits, whatever the spoken language,
+# so the parsers in ai.py, annotations.py and actions.py never change.
+_LANGUAGE_PROMPTS = {
+    "he": """\
+
+language:
+the user speaks hebrew. answer in hebrew, written the way it is spoken: short sentences, no lists or formatting, numbers as words where they are small. the lowercase rule does not apply to hebrew. keep every tag ([POINT], shape, step and action tags) exactly as specified, in english letters with digits, and name keys in english (control, alt, enter).""",
+}
+
+_STEP_PROMPT = """\
+
+guided steps:
+when what the user asks for takes more than one action on screen, give only the first step now, in one or two sentences, and point at it. then stop and wait. the user confirms the step with control alt enter (or by saying "next"), and you then get a fresh screenshot with a note that they did it. check that screenshot before going on: if the step did not happen, say what you see and repeat it; if it did, give the next step. when at least one more step remains after the one you just gave, append [STEP] right before the [POINT] tag. when the task is finished, say so and append [DONE] instead. an answer that is a single step needs neither tag. the user does not need to be told how to confirm every time; mention control alt enter only on the first step of a task."""
+
+_ACTIONS_PROMPT = """\
+
+acting for the user:
+you can also do the step yourself when the user asks you to do something (not when they ask how it is done). say in one short sentence what you are about to do, then append action tags, in the order they should run, right before the [STEP], [DONE] or [POINT] tag:
+- [CLICK:x,y] click at screenshot pixel x,y, the same coordinate space as [POINT].
+- [TYPE:text] type the text into the focused field.
+- [KEYS:ctrl+s] press a key combination. key names: ctrl, alt, shift, win, enter, tab, esc, space, backspace, delete, home, end, pageup, pagedown, up, down, left, right, f1 to f12, or a single letter or digit.
+- [POWERSHELL:command] run a powershell command on the user's pc. its output is shown to you with the next screenshot.
+one or two actions per step; a click that opens something is a step on its own, since the screen changes. never type a password or a secret. never run a command that deletes, formats or changes system settings unless the user asked for exactly that, and say what it does before running it.
+{run_note}"""
+
+_ACTIONS_RUN_NOTES = {
+    "confirm": "nothing runs until the user presses control alt enter, so end your sentence by saying so, and point at where the click will land.",
+    "auto": "clicks, typing and key presses run as soon as you have answered. a powershell command runs only after the user presses control alt enter, so say that when you use one.",
+}
+
+
+def build_system_prompt(
+    annotation: bool = False,
+    language: str = "en",
+    step_mode: bool = False,
+    actions_mode: str = "off",
+) -> str:
+    """The persona prompt (cursor or draw-on-screen) with the optional sections
+    the settings ask for: the spoken language, guided steps and acting on the
+    user's behalf. Sections come after the base prompt, so a client that keys
+    on the base prompt (OllamaClient's box request) can still tell it apart."""
+    prompt = _CLICKY_ANNOTATION_SYSTEM_PROMPT if annotation else _CLICKY_SYSTEM_PROMPT
+    if step_mode:
+        prompt += _STEP_PROMPT
+    if actions_mode in _ACTIONS_RUN_NOTES:
+        prompt += _ACTIONS_PROMPT.format(run_note=_ACTIONS_RUN_NOTES[actions_mode])
+    prompt += _LANGUAGE_PROMPTS.get(language, "")
+    return prompt
+
 _KB_SYSTEM_PREFIX_TEMPLATE = (
     "app knowledge base:\n"
     "you are helping the user with {app_name}. here is reference "
@@ -209,6 +259,13 @@ _ANTHROPIC_THINKING = {
 _OPENAI_REASONING_EFFORT = {
     "gpt-6-luna": "none",
     "gpt-6.1-sol": "low",  # Sol has no "none"
+}
+# Opus 5.5 always thinks; effort is its only dial, and it defaults to medium.
+# Low keeps the first word close to Haiku's while it still follows a task
+# across steps. Sent as extra_body so an older SDK without the typed
+# output_config parameter still passes it through.
+_ANTHROPIC_EFFORT = {
+    "claude-opus-5-5": "low",
 }
 
 
@@ -528,7 +585,9 @@ class AnthropicClient(AIClient):
         # the anthropic/ slug. Keep the slug only when routing through OpenRouter.
         via_openrouter = bool(base_url) and "openrouter.ai" in base_url
         self.model_id = model_id if via_openrouter else model_id.removeprefix("anthropic/")
-        self._thinking = _ANTHROPIC_THINKING.get(_bare_model(model_id).replace(".", "-"))
+        bare = _bare_model(model_id).replace(".", "-")
+        self._thinking = _ANTHROPIC_THINKING.get(bare)
+        self._effort = _ANTHROPIC_EFFORT.get(bare)
 
     def warm(self) -> None:
         _warm(self._http, self.client.base_url)
@@ -617,6 +676,8 @@ class AnthropicClient(AIClient):
             })
 
         extra = {"thinking": self._thinking} if self._thinking else {}
+        if self._effort:
+            extra["extra_body"] = {"output_config": {"effort": self._effort}}
         sdk_stream_mgr = self.client.messages.stream(
             model=self.model_id,
             max_tokens=max_tokens,
@@ -1037,9 +1098,11 @@ class OllamaClient(AIClient):
                     ...
                 result = stream.final_result()
         """
-        ask_for_box = self.box_style is not None and system_prompt is _CLICKY_SYSTEM_PROMPT
+        # The cursor prompt, with whatever build_system_prompt added after it,
+        # swaps its base for the box prompt; the draw prompt is left alone.
+        ask_for_box = self.box_style is not None and system_prompt.startswith(_CLICKY_SYSTEM_PROMPT)
         if ask_for_box:
-            system_prompt = _CLICKY_BOX_SYSTEM_PROMPT
+            system_prompt = _CLICKY_BOX_SYSTEM_PROMPT + system_prompt[len(_CLICKY_SYSTEM_PROMPT):]
         # Concat KB into system prompt (no multi-block support on Ollama).
         full_system = system_prompt
         if kb_content:

@@ -140,15 +140,16 @@ class TestProviderCategoriesData:
         llm = next(c for c in _PROVIDER_CATEGORIES if c.category_key == "LLM")
         assert "openai-realtime" not in [p.provider_id for p in llm.providers]
 
-    def test_anthropic_provider_has_no_model_picker(self):
-        """Minimal UX: Anthropic has no model sub-picker; it defaults to
-        Claude Sonnet 4.6 (pixel-tight). Opus 4.8 reachable via ANTHROPIC_MODEL
-        env for the rare power user, but not a visible, overwhelming choice."""
+    def test_anthropic_provider_offers_haiku_and_opus(self):
+        """Two Claude models: Haiku 5.5 first (the default, fastest and
+        cheapest) and Opus 5.5, the most capable, for multi-step tasks. The
+        choice lands in the ANTHROPIC_MODEL slot app.py already reads."""
         from settings_dialog import _PROVIDER_CATEGORIES
         llm = next(c for c in _PROVIDER_CATEGORIES if c.category_key == "LLM")
         ant = next(p for p in llm.providers if p.provider_id == "anthropic")
-        assert ant.models == ()
-        assert ant.model_setting == ""
+        assert [m.model_id for m in ant.models] == ["claude-haiku-5-5", "claude-opus-5-5"]
+        assert ant.model_setting == "ANTHROPIC_MODEL"
+        assert ant.models_editable is False
 
     def test_ollama_llm_provider_has_host_field_not_api_key(self):
         """Ollama is special: its 'api_key_env_var' slot stores OLLAMA_HOST
@@ -447,14 +448,76 @@ class TestOllamaModelDropdown:
         from settings_dialog import _OLLAMA_MODEL_SUGGESTIONS
         assert _OLLAMA_MODEL_SUGGESTIONS == ("qwen3-vl:4b-instruct",)
 
-    def test_model_row_hidden_for_anthropic_default(self, qapp, mocker):
-        """Anthropic has no model sub-picker (minimal UX), so the model
-        row is HIDDEN when Anthropic (the default) is selected.
+    def test_model_row_hidden_for_openai_default(self, qapp, mocker):
+        """OpenAI has no model sub-picker, so the model row is HIDDEN when
+        OpenAI (the default on a fresh install) is selected.
         (isHidden() not isVisible(): the dialog is never .show()-n in tests.)"""
         mocker.patch("settings_dialog.keyring.get_password", return_value=None)
         from settings_dialog import SettingsDialog
         dlg = SettingsDialog()
         assert dlg._model_rows["LLM"].isHidden() is True
+
+    def test_model_row_shows_claude_models_for_anthropic(self, qapp, mocker):
+        """Picking Anthropic shows the Haiku / Opus picker, Haiku selected
+        unless ANTHROPIC_MODEL was saved."""
+        mocker.patch("settings_dialog.keyring.get_password", return_value=None)
+        from settings_dialog import SettingsDialog, _PROVIDER_CATEGORIES
+        llm = next(c for c in _PROVIDER_CATEGORIES if c.category_key == "LLM")
+        dlg = SettingsDialog()
+        dlg._dropdowns["LLM"].setCurrentIndex(
+            [p.provider_id for p in llm.providers].index("anthropic")
+        )
+        assert dlg._model_rows["LLM"].isHidden() is False
+        combo = dlg._model_combos["LLM"]
+        assert [combo.itemData(i) for i in range(combo.count())] == ["claude-haiku-5-5", "claude-opus-5-5"]
+        assert combo.currentData() == "claude-haiku-5-5"
+
+    def test_save_persists_opus_choice(self, qapp, mocker, monkeypatch):
+        """Choosing Opus 5.5 under Anthropic writes ANTHROPIC_MODEL on Save."""
+        mocker.patch("settings_dialog.keyring.get_password", return_value=None)
+        saved = {}
+        mocker.patch(
+            "settings_dialog.keyring.set_password",
+            side_effect=lambda svc, name, val: saved.__setitem__((svc, name), val),
+        )
+        from settings_dialog import SettingsDialog, _PROVIDER_CATEGORIES
+        llm = next(c for c in _PROVIDER_CATEGORIES if c.category_key == "LLM")
+        dlg = SettingsDialog()
+        dlg._dropdowns["LLM"].setCurrentIndex(
+            [p.provider_id for p in llm.providers].index("anthropic")
+        )
+        dlg._model_combos["LLM"].setCurrentIndex(1)
+        dlg._key_inputs["LLM"].setText("sk-ant-test")
+        dlg._on_save()
+        assert saved[("clicky-windows", "ANTHROPIC_MODEL")] == "claude-opus-5-5"
+        assert saved[("clicky-windows", "LLM_PROVIDER")] == "anthropic"
+
+    def test_save_persists_language_steps_and_actions(self, qapp, mocker):
+        """The Hebrew, guided-steps and act-for-me choices land in keyring
+        under the names config.py reads (LANGUAGE, STEP_MODE, ACTIONS_MODE)."""
+        mocker.patch("settings_dialog.keyring.get_password", return_value=None)
+        saved = {}
+        mocker.patch(
+            "settings_dialog.keyring.set_password",
+            side_effect=lambda svc, name, val: saved.__setitem__((svc, name), val),
+        )
+        from settings_dialog import SettingsDialog
+        dlg = SettingsDialog()
+        dlg._language_combo.setCurrentIndex(dlg._language_combo.findData("he"))
+        dlg._steps_checkbox.setChecked(False)
+        dlg._actions_combo.setCurrentIndex(dlg._actions_combo.findData("confirm"))
+        dlg._on_save()
+        assert saved[("clicky-windows", "LANGUAGE")] == "he"
+        assert saved[("clicky-windows", "STEP_MODE")] == "off"
+        assert saved[("clicky-windows", "ACTIONS_MODE")] == "confirm"
+
+    def test_dialog_defaults_english_steps_on_actions_off(self, qapp, mocker):
+        mocker.patch("settings_dialog.keyring.get_password", return_value=None)
+        from settings_dialog import SettingsDialog
+        dlg = SettingsDialog()
+        assert dlg._language_combo.currentData() == "en"
+        assert dlg._steps_checkbox.isChecked() is True
+        assert dlg._actions_combo.currentData() == "off"
 
     def test_model_combo_repopulates_for_ollama(self, qapp, mocker):
         """Switching LLM to Ollama (index 2: ant=0, openai=1, ollama=2, gemini=3)

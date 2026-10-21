@@ -53,6 +53,17 @@ from config import KEYRING_SERVICE, OLLAMA_HOST
 # any other model can still be typed in.
 _OLLAMA_MODEL_SUGGESTIONS: tuple[str, ...] = ("qwen3-vl:4b-instruct",)
 
+# Spoken language, as (label, LANGUAGE code). Hebrew needs a cloud voice
+# (Cartesia or ElevenLabs); the local Kokoro voice has no Hebrew.
+_LANGUAGES: tuple[tuple[str, str], ...] = (("English", "en"), ("עברית (Hebrew)", "he"))
+
+# Acting on the user's behalf, as (label, ACTIONS_MODE value).
+_ACTIONS_MODES: tuple[tuple[str, str], ...] = (
+    ("Off: Clicky only points", "off"),
+    ("Ask first: act when I press Ctrl+Alt+Enter", "confirm"),
+    ("Automatic: click and type right away (PowerShell still asks)", "auto"),
+)
+
 
 # --- Provider category data model -------------------------------------------
 #
@@ -145,12 +156,20 @@ _PROVIDER_CATEGORIES: tuple[_ProviderCategory, ...] = (
                 signup_url="https://platform.openai.com/api-keys",
                 key_hint="OpenAI key (sk-...), or paste an Anthropic, Google or OpenRouter key",
             ),
+            # Two Claude models: Haiku 5.5, the cheapest and fastest to its
+            # first word, and Opus 5.5, the most capable, for tasks that take
+            # several steps. Any other model via the ANTHROPIC_MODEL env var.
             _Provider(
                 provider_id="anthropic",
                 display_name="Anthropic",
                 api_key_env_var="ANTHROPIC_API_KEY",
                 signup_url="https://console.anthropic.com/settings/keys",
                 key_hint="Anthropic key (sk-ant-) or an OpenRouter key (sk-or-)",
+                models=(
+                    _Model("Claude Haiku 5.5 (fastest, cheapest)", "claude-haiku-5-5"),
+                    _Model("Claude Opus 5.5 (most capable)", "claude-opus-5-5"),
+                ),
+                model_setting="ANTHROPIC_MODEL",
             ),
             # GPT-Realtime is intentionally NOT in this dropdown. It's
             # an experimental speech-to-speech path with known audio issues
@@ -315,6 +334,9 @@ class SettingsDialog(QDialog):
         self._category_widgets: dict[str, QWidget] = {}
         self._realtime_note: QLabel | None = None
         self._draw_checkbox: QCheckBox | None = None
+        self._language_combo: QComboBox | None = None
+        self._actions_combo: QComboBox | None = None
+        self._steps_checkbox: QCheckBox | None = None
         self._build_ui()
 
     # ---------- UI construction -----------------------------------------
@@ -352,6 +374,46 @@ class SettingsDialog(QDialog):
             resolve_setting("ANNOTATION_MODE", "off") == "on"
         )
         outer.addWidget(self._draw_checkbox)
+
+        # Language: what Clicky listens for and answers in. Persists LANGUAGE.
+        language_row = QWidget()
+        language_layout = QHBoxLayout(language_row)
+        language_layout.setContentsMargins(0, 4, 0, 0)
+        language_layout.addWidget(QLabel("Language:"))
+        self._language_combo = QComboBox()
+        for label, code in _LANGUAGES:
+            self._language_combo.addItem(label, code)
+        idx = self._language_combo.findData(resolve_setting("LANGUAGE", "en").lower())
+        self._language_combo.setCurrentIndex(max(idx, 0))
+        language_layout.addWidget(self._language_combo, stretch=1)
+        outer.addWidget(language_row)
+
+        # Guided steps: one step at a time, next on Ctrl+Alt+Enter. STEP_MODE.
+        self._steps_checkbox = QCheckBox(
+            "🪜  Guide me step by step: one step at a time, Ctrl+Alt+Enter (or \"next\") for the next one"
+        )
+        self._steps_checkbox.setChecked(resolve_setting("STEP_MODE", "on") == "on")
+        outer.addWidget(self._steps_checkbox)
+
+        # Acting on the user's behalf: clicks, typing, keys, PowerShell. ACTIONS_MODE.
+        actions_row = QWidget()
+        actions_layout = QHBoxLayout(actions_row)
+        actions_layout.setContentsMargins(0, 4, 0, 0)
+        actions_layout.addWidget(QLabel("Act for me:"))
+        self._actions_combo = QComboBox()
+        for label, mode in _ACTIONS_MODES:
+            self._actions_combo.addItem(label, mode)
+        idx = self._actions_combo.findData(resolve_setting("ACTIONS_MODE", "off"))
+        self._actions_combo.setCurrentIndex(max(idx, 0))
+        actions_layout.addWidget(self._actions_combo, stretch=1)
+        outer.addWidget(actions_row)
+        actions_note = QLabel(
+            "When on, Clicky can click, type, press keys and run PowerShell commands "
+            "you ask for. A PowerShell command always waits for Ctrl+Alt+Enter."
+        )
+        actions_note.setWordWrap(True)
+        actions_note.setStyleSheet("color: gray;")
+        outer.addWidget(actions_note)
 
         self._reveal = QCheckBox("Show keys in plain text (paste-verify)")
         self._reveal.toggled.connect(self._on_reveal_toggled)
@@ -783,6 +845,20 @@ class SettingsDialog(QDialog):
                 KEYRING_SERVICE,
                 "ANNOTATION_MODE",
                 "on" if self._draw_checkbox.isChecked() else "off",
+            )
+        if self._language_combo is not None:
+            keyring.set_password(
+                KEYRING_SERVICE, "LANGUAGE", self._language_combo.currentData() or "en",
+            )
+        if self._steps_checkbox is not None:
+            keyring.set_password(
+                KEYRING_SERVICE,
+                "STEP_MODE",
+                "on" if self._steps_checkbox.isChecked() else "off",
+            )
+        if self._actions_combo is not None:
+            keyring.set_password(
+                KEYRING_SERVICE, "ACTIONS_MODE", self._actions_combo.currentData() or "off",
             )
         self.accept()
 

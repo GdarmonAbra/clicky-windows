@@ -53,6 +53,7 @@ from config import (
     FASTER_WHISPER_COMPUTE,
     FASTER_WHISPER_DEVICE,
     FASTER_WHISPER_MODEL,
+    LANGUAGE,
 )
 
 
@@ -814,11 +815,13 @@ class CartesiaInkSTT(_StreamingSTT):
         client_factory: Optional[Callable[..., object]] = None,
         audio_stream_factory: Optional[Callable[..., object]] = None,
         idle_close_s: float = _IDLE_CLOSE_S,
+        language: str = LANGUAGE,
     ) -> None:
         super().__init__(
             api_key, sample_rate, chunk_frames, client_factory, audio_stream_factory, idle_close_s,
         )
         self._model = model
+        self._language = language  # ink-2 takes an ISO code: "en", "he", ...
         self._finals: list[str] = []
 
     @staticmethod
@@ -835,7 +838,7 @@ class CartesiaInkSTT(_StreamingSTT):
             # text; a dropped session is reopened by the next press instead.
             conn = client.stt.manual_finalize.websocket(
                 encoding="pcm_s16le", model=self._model, sample_rate=self._sample_rate,
-                language="en", max_retries=0,
+                language=self._language, max_retries=0,
             ).enter()
         except Exception as exc:
             raise RuntimeError(
@@ -1010,7 +1013,13 @@ class FasterWhisperSTT(STT):
         chunk_frames: int = AUDIO_CHUNK_FRAMES,
         model_factory: Optional[Callable[..., object]] = None,
         audio_stream_factory: Optional[Callable[..., object]] = None,
+        language: str = LANGUAGE,
     ) -> None:
+        # The ".en" models only know English; Hebrew needs the multilingual
+        # one of the same size ("base.en" -> "base").
+        if language != "en" and model_size.endswith(".en"):
+            model_size = model_size[: -len(".en")]
+        self._language = language
         self._model_size = model_size
         self._device = device
         self._compute_type = compute_type
@@ -1087,7 +1096,7 @@ class FasterWhisperSTT(STT):
             np.frombuffer(bytes(self._buffer), dtype=np.int16).astype(np.float32)
             / 32768.0
         )
-        segments, _info = self._model.transcribe(audio, language="en", beam_size=1)
+        segments, _info = self._model.transcribe(audio, language=self._language, beam_size=1)
         text = " ".join(seg.text for seg in segments).strip()
         self._latest_partial = text
         if self._partial_cb is not None:

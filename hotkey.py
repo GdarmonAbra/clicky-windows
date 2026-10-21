@@ -105,6 +105,7 @@ class PushToTalkHotkey:
         on_press: Callable[[], None],
         on_release: Callable[[], None],
         listener_class=None,
+        trigger_key=keyboard.Key.space,
     ) -> None:
         """Wire the hotkey to caller callbacks.
 
@@ -117,10 +118,15 @@ class PushToTalkHotkey:
             listener_class: DI hook for tests -- factory for building the
                             keyboard listener. Defaults to pynput.keyboard.Listener
                             at construction time so tests can inject MagicMock.
+            trigger_key:    the key held with Ctrl+Alt. Space for push-to-talk;
+                            the confirm hotkey (Ctrl+Alt+Enter, "I did that
+                            step" / "go ahead") is a second instance with
+                            Key.enter and a no-op on_release.
         """
         self._on_press_cb = on_press
         self._on_release_cb = on_release
         self._listener_class = listener_class or keyboard.Listener
+        self._trigger_key = trigger_key
 
         self._lock = threading.Lock()
         self._ctrl_down: bool = False
@@ -211,8 +217,9 @@ class PushToTalkHotkey:
         )
 
     def _is_space(self, key) -> bool:
-        """Space is a single constant in pynput (no left/right variants)."""
-        return key == keyboard.Key.space
+        """The trigger key (Space by default) is a single constant in pynput
+        (no left/right variants)."""
+        return key == self._trigger_key
 
     def _handle_press(self, key) -> Optional[bool]:
         """Low-level key-down handler called by pynput on its listener thread.

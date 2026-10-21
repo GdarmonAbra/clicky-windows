@@ -29,10 +29,12 @@ from ctypes import wintypes
 from PyQt6.QtCore import QObject, pyqtSignal
 from PyQt6.QtWidgets import QApplication
 
+import actions as user_actions
 import kb
 from ai import (
     _CLICKY_ANNOTATION_SYSTEM_PROMPT,
     OllamaClient,
+    build_system_prompt,
     create_ai_client,
 )
 from annotations import parse_annotations
@@ -47,8 +49,11 @@ from capture import (
     unscale_claude_coords,
 )
 from config import (
+    ACTIONS_MODE,
     ANNOTATION_MODE,
     ASSEMBLYAI_API_KEY,
+    LANGUAGE,
+    STEP_MODE,
     CARTESIA_API_KEY,
     GEMINI_MODEL_VISION,
     MODEL_ID,
@@ -96,6 +101,59 @@ def flush_sentences(buffer: str) -> tuple[list[str], str]:
         sentences.append(buffer[:end].strip())
         buffer = buffer[end:]
     return sentences, buffer
+
+
+# --- Guided steps + acting on the user's behalf -------------------------------
+
+_SYSTEM_PROMPT_CURSOR = build_system_prompt(
+    annotation=False, language=LANGUAGE, step_mode=STEP_MODE == "on", actions_mode=ACTIONS_MODE,
+)
+_SYSTEM_PROMPT_DRAW = build_system_prompt(
+    annotation=True, language=LANGUAGE, step_mode=STEP_MODE == "on", actions_mode=ACTIONS_MODE,
+)
+"""The persona prompts with the language, guided-steps and actions sections the
+settings ask for. Built once at import, like ANNOTATION_MODE: toggling needs an
+app restart, and the pipeline does no keyring read on the hot path."""
+
+_CONFIRM_WORDS = frozenset({
+    # English
+    "ok", "okay", "yes", "yeah", "yep", "sure", "go", "ahead", "do", "it", "done",
+    "next", "continue", "proceed", "finished", "i", "did", "that", "this", "step",
+    "the", "please", "and", "now", "then", "what's", "whats",
+    # Hebrew
+    "כן", "בסדר", "הבא", "סיימתי", "עשיתי", "תמשיך", "המשך", "קדימה", "הלאה",
+    "בצע", "תבצע", "אוקיי", "אוקי", "יאללה", "מה", "עכשיו", "זה", "את", "השלב",
+    "סיים", "גמרתי", "נו",
+})
+"""Spoken confirmations. A short transcript made only of these words ("ok
+next", "done", "הבא", "סיימתי") means "I did the step" (or "go ahead" for a
+pending action), the same as Ctrl+Alt+Enter."""
+
+_MAX_AUTO_TURNS = 8
+"""How many follow-up turns Clicky chains on its own in 'auto' actions mode
+before it waits for the user again. Each auto-run action is followed by a new
+turn so the model sees the result; this stops a model that never says [DONE]."""
+
+
+def _is_confirmation(transcript: str) -> bool:
+    """Whether the transcript is a bare confirmation rather than a question.
+    Four words at most, all from _CONFIRM_WORDS; "ok" plus a real question
+    ("ok where is the save button") is not one."""
+    words = re.findall(r"[\w']+", transcript.lower())
+    return 0 < len(words) <= 4 and all(w in _CONFIRM_WORDS for w in words)
+
+
+def _follow_up_note(action_results: list[str], confirmed: bool) -> str:
+    """The user turn Clicky sends after a confirmation or an action: the model
+    gets a fresh screenshot with it. Kept in English; the language section of
+    the system prompt still has the model answer in Hebrew."""
+    parts = []
+    if confirmed:
+        parts.append("[the user confirmed: they did the step you gave, or told you to go ahead. the screenshot shows the screen now.]")
+    if action_results:
+        parts.append("[results of the actions you asked for:\n" + "\n".join(action_results) + "]")
+    parts.append("check the screen and give the next step, or say the task is done.")
+    return "\n".join(parts)
 
 
 def unspoken_tail(spoken_text: str, spoken: list[str]) -> str:
@@ -395,6 +453,12 @@ class ClickyApp(QObject):
     sig_clear_annotations = pyqtSignal()
     # One plain-language sentence for the tray when a provider call fails.
     sig_notify = pyqtSignal(str)
+    # Ctrl+Alt+Enter: "I did that step" / "go ahead with the action". Fired on
+    # the pynput thread, handled on the Qt main thread like the other hotkey.
+    sig_confirmed = pyqtSignal()
+    # A new turn Clicky starts on its own (after a confirmation or an action
+    # it ran), carrying the note the model gets instead of a transcript.
+    sig_follow_up = pyqtSignal(str)
 
     def __init__(
         self,
@@ -404,6 +468,7 @@ class ClickyApp(QObject):
         memory_store=None,
         overlay_controller=None,
         hotkey_instance=None,
+        confirm_hotkey_instance=None,
     ) -> None:
         super().__init__()
 
@@ -442,6 +507,13 @@ class ClickyApp(QObject):
         self._memory = memory_store or MemoryStore()
         self._overlay = overlay_controller
         self._hotkey = hotkey_instance
+        self._confirm_hotkey = confirm_hotkey_instance
+
+        # Actions the model offered that wait for Ctrl+Alt+Enter, with the
+        # capture their coordinates refer to. Cleared by a new press.
+        self._pending_actions: list = []
+        self._action_capture = None
+        self._auto_turns = 0  # consecutive turns Clicky started on its own
 
         self._history: list[dict] = []
         self._cancel_event = threading.Event()
@@ -471,6 +543,8 @@ class ClickyApp(QObject):
         self.sig_hide_spinner.connect(self._on_hide_spinner)
         self.sig_show_annotations.connect(self._on_show_annotations)
         self.sig_clear_annotations.connect(self._on_clear_annotations)
+        self.sig_confirmed.connect(self._handle_confirm)
+        self.sig_follow_up.connect(self._spawn_pipeline)
 
     def start(self) -> None:
         """Initialize overlay + hotkey and begin listening.
@@ -492,12 +566,22 @@ class ClickyApp(QObject):
         self._stt.on_audio_level(lambda lvl: self.sig_audio_level.emit(lvl))
 
         self._hotkey.start()
-        _log("Listening for Ctrl+Alt+Space...")
+        if self._confirm_hotkey is None:
+            from pynput import keyboard as _keyboard
+            self._confirm_hotkey = PushToTalkHotkey(
+                on_press=lambda: self.sig_confirmed.emit(),
+                on_release=lambda: None,
+                trigger_key=_keyboard.Key.enter,
+            )
+        self._confirm_hotkey.start()
+        _log("Listening for Ctrl+Alt+Space (ask) and Ctrl+Alt+Enter (confirm)...")
 
     def stop(self) -> None:
         """Clean shutdown of all services."""
         if self._hotkey:
             self._hotkey.stop()
+        if self._confirm_hotkey:
+            self._confirm_hotkey.stop()
         self._cancel_event.set()
         self._tts.stop()
         self._stt.disconnect()
@@ -666,6 +750,10 @@ class ClickyApp(QObject):
         # (they'd otherwise linger until the 30s auto-clear timer). Cheap no-op
         # when there were no annotations.
         self.sig_clear_annotations.emit()
+        # A new question drops any action still waiting for a confirmation,
+        # and ends a chain of turns Clicky was running on its own.
+        self._pending_actions = []
+        self._auto_turns = 0
         self._tts.stop()
         # Prevent TTS speaker decay from leaking into this PTT's transcript
         # (acoustic feedback loop). 200ms window tuned to real laptop-mic decay.
@@ -814,7 +902,6 @@ class ClickyApp(QObject):
 
     def _handle_release(self) -> None:
         """Hotkey released: cancel previous worker, spawn new pipeline."""
-        import time
         # GPT-Realtime mode: capture the screen and hand it to the
         # realtime session, which commits the spoken audio + requests a
         # response (model speaks back + emits point_at). Coordinate refinement
@@ -850,6 +937,59 @@ class ClickyApp(QObject):
         # current cursor position. Cursor polygon stays hidden while spinner
         # runs; it reappears when pipeline hides spinner + fires bezier.
         self.sig_hide_waveform.emit()
+        self._spawn_pipeline(None)
+
+    def _handle_confirm(self) -> None:
+        """Ctrl+Alt+Enter: run the actions waiting for a go-ahead, then start a
+        turn with a fresh screenshot so the model checks the step and gives
+        the next one. With nothing waiting and nothing asked yet, it is a
+        stray press and is ignored. Actions run on their own thread: a
+        PowerShell command can take seconds, and the Qt loop must keep the
+        overlay alive meanwhile."""
+        if self._realtime is not None:
+            return
+        if not self._pending_actions and not self._history:
+            _log("CONFIRM: nothing to confirm yet")
+            return
+        if self._worker_thread and self._worker_thread.is_alive():
+            self._cancel_event.set()
+        self._tts.stop()
+        pending, capture = self._pending_actions, self._action_capture
+        self._pending_actions = []
+        self._auto_turns = 0
+        _log(f"CONFIRM: {len(pending)} action(s) to run")
+
+        def _run() -> None:
+            results = self._run_actions(pending, capture) if pending else []
+            self.sig_follow_up.emit(_follow_up_note(results, confirmed=True))
+
+        threading.Thread(target=_run, daemon=True, name="clicky-confirm").start()
+
+    def _run_actions(self, pending: list, capture) -> list[str]:
+        """Execute actions against the capture they were suggested on. Click
+        coordinates are in the screenshot's space and are mapped to physical
+        pixels the same way a [POINT] is."""
+        def to_physical(x: int, y: int) -> tuple[int, int]:
+            if capture is None:
+                raise RuntimeError("no screenshot to map the click to")
+            return unscale_claude_coords(
+                claude_x=x, claude_y=y,
+                scale_x=capture.scale_x, scale_y=capture.scale_y,
+                monitor_left=capture.monitor["left"], monitor_top=capture.monitor["top"],
+                target_w=capture.target_width, target_h=capture.target_height,
+            )
+        return user_actions.execute(pending, to_physical, log=_log)
+
+    def _spawn_pipeline(self, transcript: str | None) -> None:
+        """Start the capture worker and the pipeline worker for one turn. With
+        ``transcript`` None the pipeline waits for the speech-to-text result
+        (a hotkey release); with a note it skips listening (a confirmation
+        or an action Clicky ran) and the screen is captured afresh."""
+        import time
+        if transcript is not None:
+            # No press-time capture to reuse: the screen just changed.
+            self._press_captures = None
+            self._current_app, self._current_title = get_foreground_app()
 
         # Snapshot release-time cursor synchronously. Taken here (not at
         # worker-start) so mouse motion during STT can't flip the
@@ -868,12 +1008,15 @@ class ClickyApp(QObject):
             release_cursor = self._press_cursor_pos or (0, 0)
 
         if self._worker_thread and self._worker_thread.is_alive():
-            _log("  cancelling previous worker + stopping TTS")
             self._cancel_event.set()
-            self._tts.stop()
-            # Same 200ms grace as press: keeps the aborted TTS tail from
-            # contaminating the new PTT's transcript.
-            self._stt.set_tts_grace_until(time.time() + 0.200)
+            # A follow-up Clicky starts itself comes from the worker that is
+            # still finishing: its speech queues ahead and is left to play.
+            if transcript is None:
+                _log("  cancelling previous worker + stopping TTS")
+                self._tts.stop()
+                # Same 200ms grace as press: keeps the aborted TTS tail from
+                # contaminating the new PTT's transcript.
+                self._stt.set_tts_grace_until(time.time() + 0.200)
 
         self._cancel_event = threading.Event()
 
@@ -897,6 +1040,7 @@ class ClickyApp(QObject):
                 self._current_title,
                 self._cancel_event,
                 release_capture_queue,
+                transcript,
             ),
             daemon=True,
             name="clicky-pipeline",
@@ -911,6 +1055,7 @@ class ClickyApp(QObject):
         window_title: str,
         cancel: threading.Event,
         capture_queue: "queue.Queue",
+        transcript: str | None = None,
     ) -> None:
         """Sequential pipeline: STT → capture → recall → stream → TTS → overlay.
 
@@ -919,6 +1064,9 @@ class ClickyApp(QObject):
         BEFORE this thread). This thread blocks on ``stt.stop_recording()``,
         then reads the capture result from the queue. Wall-clock becomes
         ``max(STT, capture)`` instead of ``STT + capture``.
+
+        A ``transcript`` given up front is a follow-up note (the user
+        confirmed a step, or Clicky ran an action) and skips the listening.
         """
         dbg = DebugSession.start(app_name, window_title)
         # Log the ACTUAL providers this interaction used, so any
@@ -933,16 +1081,27 @@ class ClickyApp(QObject):
             if cancel.is_set():
                 return
 
-            dbg.log("STT: calling stop_recording()...")
-            transcript = self._stt.stop_recording()
-            dbg.log(f"STT: {self._stt._chunk_count} audio chunks captured")
-            dbg.log(f"STT: latest partial: {self._stt._latest_partial!r}")
-            dbg.log(f"STT: final transcript ({len(transcript)} chars): {transcript!r}")
-            _log(f"Transcript: {transcript!r}")
-            if not transcript.strip():
-                dbg.log("NO SPEECH DETECTED, skipping interaction")
-                _log("No speech detected, skipping.")
-                return
+            if transcript is None:
+                dbg.log("STT: calling stop_recording()...")
+                transcript = self._stt.stop_recording()
+                dbg.log(f"STT: {self._stt._chunk_count} audio chunks captured")
+                dbg.log(f"STT: latest partial: {self._stt._latest_partial!r}")
+                dbg.log(f"STT: final transcript ({len(transcript)} chars): {transcript!r}")
+                _log(f"Transcript: {transcript!r}")
+                if not transcript.strip():
+                    dbg.log("NO SPEECH DETECTED, skipping interaction")
+                    _log("No speech detected, skipping.")
+                    return
+                # "next" / "done" / "הבא" after a step, or "go ahead" with an
+                # action waiting: the same as Ctrl+Alt+Enter, by voice.
+                if (self._history or self._pending_actions) and _is_confirmation(transcript):
+                    pending, capture = self._pending_actions, self._action_capture
+                    self._pending_actions = []
+                    dbg.log(f"CONFIRM: by voice ({transcript!r}), {len(pending)} action(s)")
+                    results = self._run_actions(pending, capture) if pending else []
+                    transcript = _follow_up_note(results, confirmed=True)
+            else:
+                dbg.log(f"FOLLOW-UP: {transcript!r}")
 
             if cancel.is_set():
                 return
@@ -1073,9 +1232,8 @@ class ClickyApp(QObject):
                 history=self._history,
                 kb_content=kb_content,
                 kb_app_name=kb_app_name,
+                system_prompt=_SYSTEM_PROMPT_DRAW if annotation_mode else _SYSTEM_PROMPT_CURSOR,
             )
-            if annotation_mode:
-                _ask_kwargs["system_prompt"] = _CLICKY_ANNOTATION_SYSTEM_PROMPT
 
             stage = "AI"
             with self._ai.ask_stream(**_ask_kwargs) as stream:
@@ -1111,15 +1269,22 @@ class ClickyApp(QObject):
             # in result.spoken_text because ai.py's parser only strips [POINT].
             # Parse + strip them here so TTS never reads coordinates aloud, and
             # map their screenshot coords to physical for the overlay.
-            spoken_text = result.spoken_text
+            # Action tags and the [STEP]/[DONE] mark come off first, for the
+            # same reason: pure regex, so nothing of them is ever spoken.
+            spoken_text, parsed_actions = user_actions.parse_actions(result.spoken_text)
+            spoken_text, step_mark = user_actions.parse_step_tag(spoken_text)
+            if parsed_actions:
+                dbg.log("ACTIONS: " + "; ".join(user_actions.describe(a) for a in parsed_actions))
+            if step_mark:
+                dbg.log(f"STEP: {step_mark}")
             phys_annotations: list = []
             _anns: list = []
-            if annotation_mode and result.spoken_text:
+            if annotation_mode and spoken_text:
                 # Strip FIRST, outside the try: parse_annotations is pure regex
                 # and cannot raise, so spoken_text is ALWAYS tag-stripped before
                 # the tail flush (coords never reach TTS even if the coordinate
                 # transform below fails). Only the physical transform is guarded.
-                spoken_text, _anns = parse_annotations(result.spoken_text)
+                spoken_text, _anns = parse_annotations(spoken_text)
                 if _anns:
                     try:
                         phys_annotations = _annotations_to_physical(
@@ -1307,6 +1472,28 @@ class ClickyApp(QObject):
                 self._history = self._history[-(
                     _MAX_HISTORY_EXCHANGES * 2
                 ):]
+
+            # Acting on the user's behalf. Actions either wait for
+            # Ctrl+Alt+Enter (or a spoken "go ahead") or, in auto mode, run
+            # now; a run is followed by a new turn so the model sees the
+            # result and goes on, up to _MAX_AUTO_TURNS without the user.
+            if parsed_actions and ACTIONS_MODE in ("confirm", "auto"):
+                if user_actions.needs_confirmation(parsed_actions, ACTIONS_MODE):
+                    self._pending_actions = parsed_actions
+                    self._action_capture = cursor_capture
+                    dbg.log(f"ACTIONS: {len(parsed_actions)} waiting for confirmation")
+                elif self._auto_turns >= _MAX_AUTO_TURNS:
+                    dbg.log("ACTIONS: auto-turn limit reached, waiting for the user")
+                else:
+                    results = self._run_actions(parsed_actions, cursor_capture)
+                    for line in results:
+                        dbg.log(f"ACTIONS: {line.splitlines()[0]}")
+                    if cancel.is_set():
+                        return
+                    self._auto_turns += 1
+                    self.sig_follow_up.emit(_follow_up_note(results, confirmed=False))
+            elif parsed_actions:
+                dbg.log("ACTIONS: ignored, ACTIONS_MODE is off")
 
             dbg.log("DONE: interaction complete")
 

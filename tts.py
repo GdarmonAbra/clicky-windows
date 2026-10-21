@@ -43,6 +43,7 @@ from config import (
     ELEVENLABS_VOICE_ID,
     KOKORO_OUTPUT_SAMPLE_RATE,
     KOKORO_VOICE,
+    LANGUAGE,
 )
 
 
@@ -265,6 +266,7 @@ class CartesiaSonicTTS(TTS):
         sample_rate: int = CARTESIA_OUTPUT_SAMPLE_RATE,
         client_factory: Callable | None = None,
         player_factory: Callable | None = None,
+        language: str = LANGUAGE,
     ) -> None:
         """Construct a Cartesia Sonic-3 TTS client.
 
@@ -285,6 +287,7 @@ class CartesiaSonicTTS(TTS):
         self.voice_id = voice_id
         self.model_id = model_id
         self.sample_rate = sample_rate
+        self.language = language  # Sonic-3 speaks Hebrew with the same voice id
         self._client_factory = client_factory
         self._player_factory = player_factory
         self._output = _OutputStream(sample_rate)
@@ -486,6 +489,7 @@ class CartesiaSonicTTS(TTS):
                 "encoding": "pcm_f32le",
                 "sample_rate": self.sample_rate,
             },
+            language=self.language,
         ).__enter__()
 
     def _play_response(self, text: str, response, cancel: threading.Event) -> None:
@@ -793,11 +797,15 @@ class ElevenLabsTTS(TTS):
         directly (true streaming, no body pre-fetch).
         """
         client = self._build_client()
+        # Flash v2.5 picks the language from the text; a code pins it so
+        # a short Hebrew sentence is never read as something else.
+        extra = {"language_code": LANGUAGE} if LANGUAGE != "en" else {}
         return client.text_to_speech.stream(
             text=text,
             voice_id=self.voice_id,
             model_id=self.model_id,
             output_format=f"pcm_{self.sample_rate}",
+            **extra,
         )
 
     def _play_response(self, text: str, response, cancel: threading.Event) -> None:
