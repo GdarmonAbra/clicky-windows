@@ -183,7 +183,7 @@ Observe-only has a catch: two Clicky processes both hear the hotkey and both ans
 <summary><strong>Memory and a knowledge base, in plain Markdown.</strong> No vector database. You can read and edit everything Clicky knows.</summary>
 
 - **Memory.** Every question appends a short note to `~/.clicky-windows/memory/<app>.exe.md`: what you asked, what Clicky said, where it pointed. The next question in that app gets the last 1,500 characters as context.
-- **Knowledge base.** Anything in `~/Documents/Clicky Wiki/<app>.exe.md`, up to 60,000 characters, is given to the model as the reference for that app. This is how Clicky learns niche or company-internal software.
+- **Knowledge base.** Every `.md` under `~/Documents/Clicky Wiki/` and its subfolders is knowledge. `<app>.exe.md` (anywhere in the tree) is the reference for that app and always comes first; the rest (guides, process catalogs) are ranked against your question and added whole until the 60,000-character budget is used. A folder named `he` or `en` holds that language's copy, and only the current language's is read.
 
 <p align="center">
   <img src="assets/screenshots/memory-graph.png" alt="Per-app memory files viewed as an Obsidian graph" width="560" />

@@ -1178,7 +1178,7 @@ class ClickyApp(QObject):
             # symlink loops, etc.). Failure here must NOT crash the
             # pipeline: the model can still answer with vision + memory.
             try:
-                kb_content, kb_app_name = kb.recall(app_name)
+                kb_content, kb_app_name = kb.recall(app_name, query=transcript)
             except Exception as exc:
                 dbg.log(
                     f"KB: read failed ({type(exc).__name__}: {exc}), "

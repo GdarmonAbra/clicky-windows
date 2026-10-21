@@ -1,27 +1,40 @@
-"""Curated knowledge base: user-uploadable per-app docs.
+"""Curated knowledge base: the user's own docs, read from ``KB_DIR`` and
+every folder under it.
 
-One .md file per app at ``KB_DIR/<app_name>.md``. Match by .exe basename
-(sanitized like memory.py, so users see matching filenames in
-`~/.clicky-windows/memory/` and the KB folder).
-No metadata files, no folder hierarchy, no keyword ranking.
+Two kinds of file, both plain Markdown the user can edit:
 
-If the file is missing → ``recall()`` returns ``('', '')``. The
-pipeline worker checks for empty + skips KB injection, so Claude
-proceeds with vision + memory only. This is the "Claude already
-knows that software" path.
+- ``<app_name>.md`` anywhere under ``KB_DIR`` (matched by sanitized .exe
+  basename, like memory.py) is the reference for that one app. It comes
+  first and is never dropped.
+- Every other ``.md`` under ``KB_DIR`` is general knowledge (how-to guides,
+  process catalogs). A folder named after a language (``he``, ``en``) holds
+  that language's copy: the current LANGUAGE's folders are read, the other
+  languages' are skipped. The whole tree can be far bigger than the budget
+  (``KB_RECALL_MAX_CHARS``), so the files are ranked against the question:
+  index files (``README.md``) first, then by how many of the question's words
+  they contain, and whole files are added in that order until the budget is
+  used. The model also gets each file's path, so it knows what else exists.
 
-If the file is over ``KB_RECALL_MAX_CHARS``, tail-truncate (matches
-``memory.recall()`` overflow handling).
-
-The user's mental model: drop ``edupack.exe.md`` (or whatever the
-.exe basename is, visible in their existing memory folder) into
-``KB_DIR``, Clicky picks it up next PTT.
+If nothing matches, ``recall()`` returns ``('', '')`` and the pipeline skips
+KB injection (the "Claude already knows that software" path).
 """
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
-from config import KB_DIR, KB_RECALL_MAX_CHARS
+from config import KB_DIR, KB_RECALL_MAX_CHARS, LANGUAGE
+
+# Folder names that mark a language's copy of the docs.
+_LANGUAGE_FOLDERS = frozenset({"en", "he"})
+_WORD_RE = re.compile(r"[\w']+")
+# Words too common to tell files apart; the rest of the question does that.
+_STOP_WORDS = frozenset({
+    "the", "a", "an", "and", "or", "to", "of", "in", "on", "is", "it", "i", "my",
+    "me", "how", "do", "does", "can", "what", "where", "this", "that", "for",
+    "with", "not", "no", "yes", "please", "את", "של", "על", "עם", "לא", "כן",
+    "איך", "מה", "איפה", "זה", "יש", "לי", "אני", "אפשר", "בבקשה", "או", "גם",
+})
 
 
 def _sanitize_app_name(app_name: str) -> str:
@@ -38,47 +51,108 @@ def _sanitize_app_name(app_name: str) -> str:
     return sanitized
 
 
+def _words(text: str) -> set[str]:
+    return {w for w in (m.lower() for m in _WORD_RE.findall(text)) if len(w) > 1 and w not in _STOP_WORDS}
+
+
+def _in_language(path: Path, base: Path, language: str) -> bool:
+    """A file is read unless it sits under another language's folder."""
+    for part in path.relative_to(base).parts[:-1]:
+        if part.lower() in _LANGUAGE_FOLDERS and part.lower() != language:
+            return False
+    return True
+
+
+def _read(path: Path) -> str:
+    try:
+        return path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return ""
+
+
 def recall(
     app_name: str,
     kb_dir: Path | None = None,
     max_chars: int = KB_RECALL_MAX_CHARS,
+    query: str = "",
+    language: str | None = None,
 ) -> tuple[str, str]:
-    """Look up the curated KB for ``app_name``.
+    """Collect the knowledge for this question.
 
     Args:
         app_name: foreground .exe basename, e.g. ``"EDUPACK.EXE"``.
         kb_dir: override the KB folder (test hook). Defaults to
             ``config.KB_DIR``.
-        max_chars: tail-truncate limit. Defaults to
+        max_chars: budget for everything returned. Defaults to
             ``config.KB_RECALL_MAX_CHARS``.
+        query: the user's question, used to rank the general docs.
+        language: which language folders to read (``config.LANGUAGE``).
 
     Returns:
-        ``(content, sanitized_name)``. ``content`` is the markdown
-        body, tail-truncated to ``max_chars`` if the file exceeds
-        it. ``sanitized_name`` (e.g. ``"edupack.exe"``) is what
-        ``ai.py`` will display in the system-prompt injection
-        marker after stripping the .exe suffix.
+        ``(content, name)``. ``content`` is the app file (tail-truncated to
+        the budget on its own, as before) followed by the best-matching
+        general docs, each under a ``### <relative path>`` heading. ``name``
+        is the sanitized app name when its file was found (``ai.py`` shows
+        it in the injection marker), else ``"the knowledge folder"``.
 
-        Both empty if no file matches, ``app_name`` is blank, or
+        Both empty if nothing matches, ``app_name`` is blank, or
         ``max_chars <= 0`` (defensive guard: Python's ``text[-0:]``
-        otherwise returns the whole string, so a caller passing 0
-        from a misconfigured override would get the FULL file).
+        otherwise returns the whole string).
     """
     if max_chars <= 0:
         return ("", "")
     if not app_name or not app_name.strip():
         return ("", "")
 
-    sanitized = _sanitize_app_name(app_name)
     base_dir = Path(kb_dir) if kb_dir is not None else KB_DIR
-    md_path = base_dir / f"{sanitized}.md"
-    if not md_path.is_file():
+    if not base_dir.is_dir():
         return ("", "")
+    language = (language or LANGUAGE).lower()
+    sanitized = _sanitize_app_name(app_name)
+    app_file = f"{sanitized}.md"
 
-    text = md_path.read_text(encoding="utf-8")
-    if len(text) > max_chars:
-        text = text[-max_chars:]
-    return (text, sanitized)
+    files = sorted(p for p in base_dir.rglob("*.md") if p.is_file())
+    app_paths = [p for p in files if p.name.lower() == app_file]
+    general = [p for p in files if p.name.lower() != app_file and _in_language(p, base_dir, language)]
+
+    parts: list[str] = []
+    budget = max_chars
+    name = ""
+    if app_paths:
+        text = _read(app_paths[0])
+        if len(text) > budget:
+            text = text[-budget:]
+        parts.append(text)
+        budget -= len(text)
+        name = sanitized
+
+    if general and budget > 0:
+        asked = _words(query)
+        ranked = []
+        for p in general:
+            text = _read(p)
+            if not text.strip():
+                continue
+            rel = p.relative_to(base_dir).as_posix()
+            hits = len(asked & _words(text)) if asked else 0
+            is_index = p.name.lower() == "readme.md"
+            # Indexes first (they say what the folder holds), then the files
+            # that share the most words with the question, shortest first
+            # among equals so more of them fit.
+            ranked.append(((0 if is_index else 1, -hits, len(text)), rel, text))
+        ranked.sort(key=lambda item: item[0])
+        for _, rel, text in ranked:
+            block = f"\n\n### {rel}\n{text.strip()}"
+            if len(block) > budget:
+                continue  # whole files only, so a guide is never cut mid-step
+            parts.append(block)
+            budget -= len(block)
+        if len(parts) > (1 if app_paths else 0) and not name:
+            name = "the knowledge folder"
+
+    if not parts:
+        return ("", "")
+    return ("".join(parts), name)
 
 
 if __name__ == "__main__":
@@ -86,26 +160,13 @@ if __name__ == "__main__":
     print("Clicky Windows -- kb.py manual verification")
     print(f"  KB_DIR: {KB_DIR}")
     print(f"  KB_RECALL_MAX_CHARS: {KB_RECALL_MAX_CHARS}")
+    print(f"  LANGUAGE: {LANGUAGE}")
     print("=" * 70)
 
-    test_apps = [
-        "EDUPACK.EXE",
-        "edupack.exe",
-        "Fusion360.exe",
-        "blender.exe",
-        "DOES_NOT_EXIST.EXE",
-    ]
-    for app in test_apps:
-        content, name = recall(app)
+    for app, q in [("EDUPACK.EXE", ""), ("outlook.exe", "the printer does not print"), ("DOES_NOT_EXIST.EXE", "")]:
+        content, name = recall(app, query=q)
         if content:
-            print(f"\n{app:30s} -> matched {name!r}, {len(content)} chars")
-            preview = content[:120].replace("\n", " ")
-            print(f"  preview: {preview!r}...")
+            files = re.findall(r"^### (.+)$", content, re.MULTILINE)
+            print(f"\n{app:24s} {q!r:34s} -> {name!r}, {len(content)} chars, files: {files[:6]}")
         else:
-            print(
-                f"\n{app:30s} -> no file ({_sanitize_app_name(app)}.md "
-                f"not in {KB_DIR})"
-            )
-
-    print(f"\nDrop an .md file at:\n  {KB_DIR / 'edupack.exe.md'}")
-    print("...then re-run to see it injected.")
+            print(f"\n{app:24s} {q!r:34s} -> nothing under {KB_DIR}")

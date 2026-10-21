@@ -109,3 +109,57 @@ class TestRecall:
         content, name = recall("blender.exe")
         assert content == body
         assert name == "blender.exe"
+
+
+class TestKnowledgeFolder:
+    """Every .md under KB_DIR and its subfolders is knowledge; the current
+    language's folders are read, other languages' skipped; files are ranked
+    against the question and added whole until the budget is used."""
+
+    def _tree(self, tmp_path):
+        (tmp_path / "en").mkdir(); (tmp_path / "he").mkdir(); (tmp_path / "cat" / "he").mkdir(parents=True)
+        (tmp_path / "en" / "README.md").write_text("# guides\n1. camera\n2. printer", encoding="utf-8")
+        (tmp_path / "en" / "01-camera.md").write_text("# camera not working\nopen settings, privacy, camera.", encoding="utf-8")
+        (tmp_path / "en" / "03-printer.md").write_text("# printer does not print\ncheck the printer queue and restart the spooler.", encoding="utf-8")
+        (tmp_path / "he" / "03-printer.md").write_text("# המדפסת לא מדפיסה\nבדוק את תור ההדפסה.", encoding="utf-8")
+        (tmp_path / "cat" / "he" / "O2C.md").write_text("# הזמנה לתשלום\nמכירות וחשבוניות.", encoding="utf-8")
+        (tmp_path / "cat" / "outlook.exe.md").write_text("# outlook reference", encoding="utf-8")
+
+    def test_reads_subfolders_in_the_current_language(self, tmp_path):
+        from kb import recall
+        self._tree(tmp_path)
+        content, name = recall("chrome.exe", kb_dir=tmp_path, query="my printer does not print", language="en")
+        assert name == "the knowledge folder"
+        assert "### en/README.md" in content and "### en/03-printer.md" in content
+        assert "he/03-printer.md" not in content and "cat/he/O2C.md" not in content
+        # the printer guide outranks the camera guide for a printer question
+        assert content.index("03-printer.md") < content.index("01-camera.md")
+
+    def test_hebrew_reads_hebrew_folders_and_unmarked_files(self, tmp_path):
+        from kb import recall
+        self._tree(tmp_path)
+        content, _ = recall("chrome.exe", kb_dir=tmp_path, query="המדפסת לא מדפיסה", language="he")
+        assert "### he/03-printer.md" in content and "### cat/he/O2C.md" in content
+        assert "en/03-printer.md" not in content
+
+    def test_app_file_found_in_a_subfolder_comes_first(self, tmp_path):
+        from kb import recall
+        self._tree(tmp_path)
+        content, name = recall("OUTLOOK.EXE", kb_dir=tmp_path, query="printer", language="en")
+        assert name == "outlook.exe"
+        assert content.startswith("# outlook reference")
+        assert "### en/03-printer.md" in content
+
+    def test_budget_keeps_whole_files_only(self, tmp_path):
+        from kb import recall
+        self._tree(tmp_path)
+        content, _ = recall("chrome.exe", kb_dir=tmp_path, query="printer", language="en", max_chars=120)
+        assert len(content) <= 120
+        for block in content.split("\n\n### ")[1:]:
+            assert block.rstrip().endswith((".", "printer", "reference")), block  # no file cut mid-text
+
+    def test_nothing_in_language_returns_empty(self, tmp_path):
+        from kb import recall
+        (tmp_path / "en").mkdir()
+        (tmp_path / "en" / "a.md").write_text("english only", encoding="utf-8")
+        assert recall("chrome.exe", kb_dir=tmp_path, language="he") == ("", "")
