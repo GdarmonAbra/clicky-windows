@@ -34,7 +34,15 @@ _STOP_WORDS = frozenset({
     "me", "how", "do", "does", "can", "what", "where", "this", "that", "for",
     "with", "not", "no", "yes", "please", "את", "של", "על", "עם", "לא", "כן",
     "איך", "מה", "איפה", "זה", "יש", "לי", "אני", "אפשר", "בבקשה", "או", "גם",
+    "אתה", "את", "יכול", "יכולה", "לעשות", "רוצה", "צריך", "צריכה", "אם", "כל",
+    "הוא", "היא", "הם", "אבל", "אז", "רק", "עוד", "כאן", "שם", "לך", "לנו",
+    "you", "your", "we", "our", "be", "are", "was", "have", "has", "will",
+    "want", "need", "should", "would", "could", "just", "now", "here", "there",
 })
+_MIN_HITS = 2
+"""Words a file must share with the question to be sent. One shared word is
+usually a common one ("printer" in an index of every guide); two mean the file
+is about the thing asked."""
 
 
 def _sanitize_app_name(app_name: str) -> str:
@@ -52,7 +60,7 @@ def _sanitize_app_name(app_name: str) -> str:
 
 
 def _words(text: str) -> set[str]:
-    return {w for w in (m.lower() for m in _WORD_RE.findall(text)) if len(w) > 1 and w not in _STOP_WORDS}
+    return {w for w in (m.lower() for m in _WORD_RE.findall(text)) if len(w) > 2 and w not in _STOP_WORDS}
 
 
 def _in_language(path: Path, base: Path, language: str) -> bool:
@@ -136,9 +144,15 @@ def recall(
             rel = p.relative_to(base_dir).as_posix()
             hits = len(asked & _words(text)) if asked else 0
             is_index = p.name.lower() == "readme.md"
-            # Indexes first (they say what the folder holds), then the files
-            # that share the most words with the question, shortest first
-            # among equals so more of them fit.
+            depth = len(p.relative_to(base_dir).parts)
+            # Only what the question touches: a file is sent when it shares a
+            # word with the question, plus the top indexes (two levels down
+            # at most) so the model knows what else the folder holds. A
+            # question about nothing in the folder costs a few hundred tokens
+            # instead of the whole budget. Indexes first, then the files
+            # sharing the most words, shortest first among equals.
+            if hits < _MIN_HITS and not (is_index and depth <= 2):
+                continue
             ranked.append(((0 if is_index else 1, -hits, len(text)), rel, text))
         ranked.sort(key=lambda item: item[0])
         for _, rel, text in ranked:

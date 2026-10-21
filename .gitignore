@@ -48,3 +48,5 @@ desktop.ini
 .idea/
 *.swp
 *.swo
+dist2/
+build2/

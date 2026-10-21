@@ -132,28 +132,37 @@ class TestKnowledgeFolder:
         assert name == "the knowledge folder"
         assert "### en/README.md" in content and "### en/03-printer.md" in content
         assert "he/03-printer.md" not in content and "cat/he/O2C.md" not in content
-        # the printer guide outranks the camera guide for a printer question
-        assert content.index("03-printer.md") < content.index("01-camera.md")
+        # a guide about something else is not sent for a printer question
+        assert "01-camera.md" not in content
 
     def test_hebrew_reads_hebrew_folders_and_unmarked_files(self, tmp_path):
         from kb import recall
         self._tree(tmp_path)
         content, _ = recall("chrome.exe", kb_dir=tmp_path, query="המדפסת לא מדפיסה", language="he")
-        assert "### he/03-printer.md" in content and "### cat/he/O2C.md" in content
-        assert "en/03-printer.md" not in content
+        assert "### he/03-printer.md" in content
+        assert "en/03-printer.md" not in content and "cat/he/O2C.md" not in content  # not about printers
+        content, _ = recall("chrome.exe", kb_dir=tmp_path, query="הזמנה לתשלום מכירות", language="he")
+        assert "### cat/he/O2C.md" in content
 
     def test_app_file_found_in_a_subfolder_comes_first(self, tmp_path):
         from kb import recall
         self._tree(tmp_path)
-        content, name = recall("OUTLOOK.EXE", kb_dir=tmp_path, query="printer", language="en")
+        content, name = recall("OUTLOOK.EXE", kb_dir=tmp_path, query="printer does not print", language="en")
         assert name == "outlook.exe"
         assert content.startswith("# outlook reference")
         assert "### en/03-printer.md" in content
 
+    def test_unrelated_question_sends_only_the_top_indexes(self, tmp_path):
+        from kb import recall
+        self._tree(tmp_path)
+        content, _ = recall("chrome.exe", kb_dir=tmp_path, query="what can you do", language="en")
+        assert "### en/README.md" in content
+        assert "03-printer.md" not in content and "01-camera.md" not in content
+
     def test_budget_keeps_whole_files_only(self, tmp_path):
         from kb import recall
         self._tree(tmp_path)
-        content, _ = recall("chrome.exe", kb_dir=tmp_path, query="printer", language="en", max_chars=120)
+        content, _ = recall("chrome.exe", kb_dir=tmp_path, query="printer does not print", language="en", max_chars=120)
         assert len(content) <= 120
         for block in content.split("\n\n### ")[1:]:
             assert block.rstrip().endswith((".", "printer", "reference")), block  # no file cut mid-text
