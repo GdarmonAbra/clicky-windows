@@ -135,7 +135,7 @@ before it waits for the user again. Each auto-run action is followed by a new
 turn so the model sees the result; opening a site and finding something on
 it takes a handful. This stops a model that never says [DONE]."""
 
-_ACTION_SETTLE_S = 1.5
+_ACTION_SETTLE_S = 0.6
 """Pause after actions before the next screenshot, so an app or page that an
 action opened has drawn by the time the model looks."""
 
