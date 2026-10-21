@@ -71,11 +71,31 @@ def _in_language(path: Path, base: Path, language: str) -> bool:
     return True
 
 
+_cache: dict[Path, tuple[float, str, set[str]]] = {}
+"""(mtime, text, words) per file. The folder can hold half a megabyte; reading
+and tokenizing it every turn cost 0.6 s before the model was even asked. A
+file is re-read when its modification time changes, so edits still count."""
+
+
 def _read(path: Path) -> str:
+    return _load(path)[0]
+
+
+def _load(path: Path) -> tuple[str, set[str]]:
     try:
-        return path.read_text(encoding="utf-8", errors="replace")
+        mtime = path.stat().st_mtime
     except OSError:
-        return ""
+        return "", set()
+    hit = _cache.get(path)
+    if hit and hit[0] == mtime:
+        return hit[1], hit[2]
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return "", set()
+    words = _words(text)
+    _cache[path] = (mtime, text, words)
+    return text, words
 
 
 def recall(
@@ -138,11 +158,11 @@ def recall(
         asked = _words(query)
         ranked = []
         for p in general:
-            text = _read(p)
+            text, words = _load(p)
             if not text.strip():
                 continue
             rel = p.relative_to(base_dir).as_posix()
-            hits = len(asked & _words(text)) if asked else 0
+            hits = len(asked & words) if asked else 0
             is_index = p.name.lower() == "readme.md"
             depth = len(p.relative_to(base_dir).parts)
             # Only what the question touches: a file is sent when it shares a
