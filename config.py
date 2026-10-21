@@ -275,6 +275,13 @@ one when the user confirms (Ctrl+Alt+Enter, or saying "next" / "done" /
 "הבא"). Clicky looks at the screen again before each step, so it can tell
 whether the last one worked. 'off' answers the whole task in one go."""
 
+WATCH_MODE: str = resolve_setting("WATCH_MODE", default="on")
+"""Live screen. When 'on' (default) and a guided task is under way, each of
+the user's own mouse clicks is taken as "I did that": after a short pause
+Clicky captures the screen again and reacts (next step, or help with what
+the user is doing now), with no hotkey press. 'off' waits for
+Ctrl+Alt+Enter or a spoken "next"."""
+
 ACTIONS_MODE: str = resolve_setting("ACTIONS_MODE", default="off")
 """Acting on the user's behalf. 'off' (default): Clicky only points.
 'confirm': the model may offer to click, type, press keys or run a

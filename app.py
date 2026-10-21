@@ -54,6 +54,7 @@ from config import (
     ASSEMBLYAI_API_KEY,
     LANGUAGE,
     STEP_MODE,
+    WATCH_MODE,
     CARTESIA_API_KEY,
     GEMINI_MODEL_VISION,
     MODEL_ID,
@@ -148,12 +149,14 @@ def _is_confirmation(transcript: str) -> bool:
     return 0 < len(words) <= 4 and all(w in _CONFIRM_WORDS for w in words)
 
 
-def _follow_up_note(action_results: list[str], confirmed: bool) -> str:
-    """The user turn Clicky sends after a confirmation or an action: the model
-    gets a fresh screenshot with it. Kept in English; the language section of
-    the system prompt still has the model answer in Hebrew."""
+def _follow_up_note(action_results: list[str], confirmed: bool, clicked: bool = False) -> str:
+    """The user turn Clicky sends after a confirmation, a click or an action:
+    the model gets a fresh screenshot with it. Kept in English; the language
+    section of the system prompt still has the model answer in Hebrew."""
     parts = []
-    if confirmed:
+    if clicked:
+        parts.append("[the user just clicked somewhere on screen, most likely doing the step you gave. the screenshot shows the screen now. if the step is done, give the next one; if they clicked elsewhere, help with what they are doing now; if nothing changed yet, say so briefly.]")
+    elif confirmed:
         parts.append("[the user confirmed: they did the step you gave, or told you to go ahead. the screenshot shows the screen now.]")
     if action_results:
         parts.append("[results of the actions you asked for:\n" + "\n".join(action_results) + "]")
@@ -464,6 +467,8 @@ class ClickyApp(QObject):
     # A new turn Clicky starts on its own (after a confirmation or an action
     # it ran), carrying the note the model gets instead of a transcript.
     sig_follow_up = pyqtSignal(str)
+    # The user clicked while a guided task is under way (live screen).
+    sig_user_clicked = pyqtSignal()
 
     def __init__(
         self,
@@ -474,6 +479,7 @@ class ClickyApp(QObject):
         overlay_controller=None,
         hotkey_instance=None,
         confirm_hotkey_instance=None,
+        mouse_listener_instance=None,
     ) -> None:
         super().__init__()
 
@@ -519,6 +525,12 @@ class ClickyApp(QObject):
         self._pending_actions: list = []
         self._action_capture = None
         self._auto_turns = 0  # consecutive turns Clicky started on its own
+        # Live screen: a guided task is under way (the last answer said
+        # [STEP]), so the user's next click means "I did that".
+        self._step_pending = False
+        self._running_actions = False  # Clicky's own clicks must not count
+        self._mouse_listener = mouse_listener_instance
+        self._click_timer: threading.Timer | None = None
 
         self._history: list[dict] = []
         self._cancel_event = threading.Event()
@@ -550,6 +562,7 @@ class ClickyApp(QObject):
         self.sig_clear_annotations.connect(self._on_clear_annotations)
         self.sig_confirmed.connect(self._handle_confirm)
         self.sig_follow_up.connect(self._spawn_pipeline)
+        self.sig_user_clicked.connect(self._handle_user_click)
 
     def start(self) -> None:
         """Initialize overlay + hotkey and begin listening.
@@ -579,6 +592,13 @@ class ClickyApp(QObject):
                 trigger_key=_keyboard.Key.enter,
             )
         self._confirm_hotkey.start()
+        if WATCH_MODE == "on":
+            if self._mouse_listener is None:
+                from pynput import mouse as _mouse
+                # Observe-only, like the keyboard hook: clicks still reach
+                # the app under the cursor.
+                self._mouse_listener = _mouse.Listener(on_click=self._on_mouse_click)
+            self._mouse_listener.start()
         _log("Listening for Ctrl+Alt+Space (ask) and Ctrl+Alt+Enter (confirm)...")
 
     def stop(self) -> None:
@@ -587,6 +607,13 @@ class ClickyApp(QObject):
             self._hotkey.stop()
         if self._confirm_hotkey:
             self._confirm_hotkey.stop()
+        if self._mouse_listener:
+            try:
+                self._mouse_listener.stop()
+            except Exception:
+                pass
+        if self._click_timer:
+            self._click_timer.cancel()
         self._cancel_event.set()
         self._tts.stop()
         self._stt.disconnect()
@@ -970,6 +997,46 @@ class ClickyApp(QObject):
 
         threading.Thread(target=_run, daemon=True, name="clicky-confirm").start()
 
+    # --- Live screen: the user's clicks advance a guided task ---------------
+
+    def _watching(self) -> bool:
+        """Whether a click should be taken as "I did the step"."""
+        return (
+            WATCH_MODE == "on"
+            and self._step_pending
+            and not self._pending_actions
+            and not self._running_actions
+            and self._realtime is None
+        )
+
+    def _on_mouse_click(self, x, y, button, pressed) -> None:
+        """pynput mouse hook (its own thread). A left-button release while a
+        task is under way arms a short timer, reset by further clicks, so a
+        double-click or a quick run of clicks gives one look at the screen,
+        after it has had time to change."""
+        if pressed or getattr(button, "name", str(button)) != "left" or not self._watching():
+            return
+        if self._click_timer:
+            self._click_timer.cancel()
+        self._click_timer = threading.Timer(_ACTION_SETTLE_S, self.sig_user_clicked.emit)
+        self._click_timer.daemon = True
+        self._click_timer.start()
+
+    def _handle_user_click(self) -> None:
+        """Qt main thread. The screen has settled after the user's click:
+        look at it and react. If an answer is still being worked out, look
+        again a little later instead of cutting it off."""
+        if not self._watching():
+            return
+        if self._worker_thread and self._worker_thread.is_alive():
+            self._click_timer = threading.Timer(1.0, self.sig_user_clicked.emit)
+            self._click_timer.daemon = True
+            self._click_timer.start()
+            return
+        _log("WATCH: user clicked, looking at the screen")
+        self._tts.stop()
+        self._spawn_pipeline(_follow_up_note([], confirmed=False, clicked=True))
+
     def _run_actions(self, pending: list, capture) -> list[str]:
         """Execute actions against the capture they were suggested on. Click
         coordinates are in the screenshot's space and are mapped to physical
@@ -983,7 +1050,11 @@ class ClickyApp(QObject):
                 monitor_left=capture.monitor["left"], monitor_top=capture.monitor["top"],
                 target_w=capture.target_width, target_h=capture.target_height,
             )
-        results = user_actions.execute(pending, to_physical, log=_log)
+        self._running_actions = True
+        try:
+            results = user_actions.execute(pending, to_physical, log=_log)
+        finally:
+            self._running_actions = False
         if results:
             threading.Event().wait(_ACTION_SETTLE_S)
         return results
@@ -1285,6 +1356,9 @@ class ClickyApp(QObject):
                 dbg.log("ACTIONS: " + "; ".join(user_actions.describe(a) for a in parsed_actions))
             if step_mark:
                 dbg.log(f"STEP: {step_mark}")
+            # Live screen watches the user's clicks only while a step is
+            # outstanding; [DONE] or a one-shot answer ends the task.
+            self._step_pending = step_mark == "step"
             phys_annotations: list = []
             _anns: list = []
             if annotation_mode and spoken_text:

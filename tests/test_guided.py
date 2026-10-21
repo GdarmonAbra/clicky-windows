@@ -145,7 +145,7 @@ class TestConfirmFlow:
             ai_client=mocker.MagicMock(), stt_client=mocker.MagicMock(),
             tts_client=mocker.MagicMock(), memory_store=mocker.MagicMock(),
             overlay_controller=mocker.MagicMock(), hotkey_instance=mocker.MagicMock(),
-            confirm_hotkey_instance=mocker.MagicMock(),
+            confirm_hotkey_instance=mocker.MagicMock(), mouse_listener_instance=mocker.MagicMock(),
         )
 
     def _cap(self, mocker):
@@ -160,12 +160,15 @@ class TestConfirmFlow:
         return cap
 
     def test_start_starts_both_hotkeys(self, mocker):
+        mocker.patch("app.WATCH_MODE", "on")
         app = self._make_app(mocker)
         app.start()
         app._hotkey.start.assert_called_once()
         app._confirm_hotkey.start.assert_called_once()
+        app._mouse_listener.start.assert_called_once()
         app.stop()
         app._confirm_hotkey.stop.assert_called_once()
+        app._mouse_listener.stop.assert_called_once()
 
     def test_stray_confirm_with_nothing_asked_is_ignored(self, mocker):
         app = self._make_app(mocker)
@@ -325,3 +328,97 @@ class TestConfirmFlow:
             assert sent == _SYSTEM_PROMPT_DRAW and sent.startswith(_CLICKY_ANNOTATION_SYSTEM_PROMPT)
         else:
             assert sent == _SYSTEM_PROMPT_CURSOR and sent.startswith(_CLICKY_SYSTEM_PROMPT)
+
+
+class TestLiveScreen:
+    """A click by the user during a guided task is "I did that": after a short
+    settle Clicky looks at the screen again, with no hotkey."""
+
+    @pytest.fixture(autouse=True)
+    def _fast(self, mocker):
+        mocker.patch("app._ACTION_SETTLE_S", 0.01)
+        mocker.patch("app.WATCH_MODE", "on")
+
+    def _make_app(self, mocker):
+        from app import ClickyApp
+        return ClickyApp(
+            ai_client=mocker.MagicMock(), stt_client=mocker.MagicMock(),
+            tts_client=mocker.MagicMock(), memory_store=mocker.MagicMock(),
+            overlay_controller=mocker.MagicMock(), hotkey_instance=mocker.MagicMock(),
+            confirm_hotkey_instance=mocker.MagicMock(), mouse_listener_instance=mocker.MagicMock(),
+        )
+
+    def _left(self):
+        from pynput import mouse
+        return mouse.Button.left
+
+    def test_click_during_a_step_looks_at_the_screen(self, mocker):
+        app = self._make_app(mocker)
+        app._step_pending = True
+        spawn = mocker.patch.object(app, "_spawn_pipeline")
+        app._on_mouse_click(10, 10, self._left(), pressed=True)
+        app._on_mouse_click(10, 10, self._left(), pressed=False)
+        app._click_timer.join(1)
+        app._handle_user_click()  # what the queued signal does on the main thread
+        spawn.assert_called_once()
+        assert "the user just clicked" in spawn.call_args.args[0]
+        app._tts.stop.assert_called_once()
+
+    def test_no_step_outstanding_ignores_clicks(self, mocker):
+        app = self._make_app(mocker)
+        app._step_pending = False
+        app._on_mouse_click(10, 10, self._left(), pressed=False)
+        assert app._click_timer is None
+
+    def test_clickys_own_clicks_and_pending_actions_do_not_count(self, mocker):
+        from actions import Click
+        app = self._make_app(mocker)
+        app._step_pending = True
+        app._running_actions = True
+        app._on_mouse_click(1, 1, self._left(), pressed=False)
+        assert app._click_timer is None
+        app._running_actions = False
+        app._pending_actions = [Click(1, 1)]
+        app._on_mouse_click(1, 1, self._left(), pressed=False)
+        assert app._click_timer is None
+
+    def test_right_click_ignored(self, mocker):
+        from pynput import mouse
+        app = self._make_app(mocker)
+        app._step_pending = True
+        app._on_mouse_click(1, 1, mouse.Button.right, pressed=False)
+        assert app._click_timer is None
+
+    def test_watch_off_ignores_clicks(self, mocker):
+        mocker.patch("app.WATCH_MODE", "off")
+        app = self._make_app(mocker)
+        app._step_pending = True
+        app._on_mouse_click(1, 1, self._left(), pressed=False)
+        assert app._click_timer is None
+
+    def test_click_while_answering_is_retried_later(self, mocker):
+        app = self._make_app(mocker)
+        app._step_pending = True
+        app._worker_thread = mocker.MagicMock(is_alive=lambda: True)
+        spawn = mocker.patch.object(app, "_spawn_pipeline")
+        app._handle_user_click()
+        spawn.assert_not_called()
+        assert app._click_timer is not None
+        app._click_timer.cancel()
+
+    def test_step_tag_sets_and_done_clears_the_task(self, mocker):
+        import queue as _queue
+        from PIL import Image
+        app = self._make_app(mocker)
+        cap = mocker.MagicMock(image=Image.new("RGB", (8, 8)), label="s", scale_x=1.0, scale_y=1.0,
+                               monitor={"left": 0, "top": 0}, target_width=8, target_height=8)
+        for spoken, expected in (("click file. [STEP]", True), ("all done. [DONE]", False), ("html is markup.", False)):
+            stream = mocker.MagicMock()
+            stream.text_deltas.return_value = iter([spoken])
+            stream.final_result.return_value = mocker.MagicMock(spoken_text=spoken, coordinate=None, element_label=None, screen_number=None)
+            app._ai.ask_stream.return_value.__enter__ = mocker.MagicMock(return_value=stream)
+            app._ai.ask_stream.return_value.__exit__ = mocker.MagicMock(return_value=False)
+            q = _queue.Queue(maxsize=1); q.put(([cap], "", "t"))
+            app._stt.stop_recording.return_value = "how do i save"
+            app._pipeline_worker("X.EXE", "", threading.Event(), q)
+            assert app._step_pending is expected, spoken

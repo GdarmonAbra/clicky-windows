@@ -337,6 +337,7 @@ class SettingsDialog(QDialog):
         self._language_combo: QComboBox | None = None
         self._actions_combo: QComboBox | None = None
         self._steps_checkbox: QCheckBox | None = None
+        self._watch_checkbox: QCheckBox | None = None
         self._build_ui()
 
     # ---------- UI construction -----------------------------------------
@@ -394,6 +395,13 @@ class SettingsDialog(QDialog):
         )
         self._steps_checkbox.setChecked(resolve_setting("STEP_MODE", "on") == "on")
         outer.addWidget(self._steps_checkbox)
+
+        # Live screen: the user's clicks advance a guided task. WATCH_MODE.
+        self._watch_checkbox = QCheckBox(
+            "👁  Live screen: during a task, react to my clicks without a hotkey"
+        )
+        self._watch_checkbox.setChecked(resolve_setting("WATCH_MODE", "on") == "on")
+        outer.addWidget(self._watch_checkbox)
 
         # Acting on the user's behalf: clicks, typing, keys, PowerShell. ACTIONS_MODE.
         actions_row = QWidget()
@@ -859,6 +867,12 @@ class SettingsDialog(QDialog):
         if self._actions_combo is not None:
             keyring.set_password(
                 KEYRING_SERVICE, "ACTIONS_MODE", self._actions_combo.currentData() or "off",
+            )
+        if self._watch_checkbox is not None:
+            keyring.set_password(
+                KEYRING_SERVICE,
+                "WATCH_MODE",
+                "on" if self._watch_checkbox.isChecked() else "off",
             )
         self.accept()
 
