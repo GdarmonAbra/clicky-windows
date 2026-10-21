@@ -167,7 +167,7 @@ class TestProviderCategoriesData:
         from settings_dialog import _PROVIDER_CATEGORIES
         stt = next(c for c in _PROVIDER_CATEGORIES if c.category_key == "STT")
         assert [p.provider_id for p in stt.providers] == [
-            "cartesia", "assemblyai", "faster-whisper",
+            "cartesia", "assemblyai", "openai", "faster-whisper",
         ]
         assert stt.default_index == 0  # Cartesia, the same key as the voice
 
@@ -175,7 +175,7 @@ class TestProviderCategoriesData:
         from settings_dialog import _PROVIDER_CATEGORIES
         tts = next(c for c in _PROVIDER_CATEGORIES if c.category_key == "TTS")
         assert [p.provider_id for p in tts.providers] == [
-            "cartesia", "elevenlabs", "kokoro",
+            "cartesia", "elevenlabs", "openai", "kokoro",
         ]
         assert tts.default_index == 0  # Cartesia default
 
@@ -287,7 +287,7 @@ class TestSettingsDialogRender:
         dlg = SettingsDialog()
         tts_dropdown = dlg._dropdowns["TTS"]
         items = [tts_dropdown.itemText(i) for i in range(tts_dropdown.count())]
-        assert items == ["Cartesia", "ElevenLabs", "Local (Kokoro)"]
+        assert items == ["Cartesia", "ElevenLabs", "OpenAI (gpt-4o-mini-tts)", "Local (Kokoro)"]
 
     def test_llm_dropdown_has_expected_providers(self, qapp, mocker):
         """LLM dropdown includes Anthropic, OpenAI, Ollama, Gemini (Realtime
@@ -309,7 +309,7 @@ class TestSettingsDialogRender:
         dlg = SettingsDialog()
         stt_dropdown = dlg._dropdowns["STT"]
         ids = [stt_dropdown.itemData(i) for i in range(stt_dropdown.count())]
-        assert ids == ["cartesia", "assemblyai", "faster-whisper"]
+        assert ids == ["cartesia", "assemblyai", "openai", "faster-whisper"]
         assert stt_dropdown.currentIndex() == 0
 
 class TestSettingsDialogDropdownSwap:

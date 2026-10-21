@@ -44,6 +44,9 @@ from config import (
     KOKORO_OUTPUT_SAMPLE_RATE,
     KOKORO_VOICE,
     LANGUAGE,
+    OPENAI_TTS_MODEL,
+    OPENAI_TTS_SAMPLE_RATE,
+    OPENAI_TTS_VOICE,
 )
 
 
@@ -1021,6 +1024,99 @@ class KokoroTTS(CartesiaSonicTTS):
             self._active_audio_stream = None
 
 
+class OpenAITTS(CartesiaSonicTTS):
+    """OpenAI text-to-speech (gpt-4o-mini-tts), streamed as 24 kHz int16 PCM.
+
+    Reuses CartesiaSonicTTS's prefetch/playback workers; only the request
+    and the chunk decoding differ. Speaks Hebrew. Same OPENAI_API_KEY as the
+    model and the OpenAI listening provider.
+    """
+
+    def __init__(
+        self,
+        api_key: str,
+        voice: str = OPENAI_TTS_VOICE,
+        model_id: str = OPENAI_TTS_MODEL,
+        sample_rate: int = OPENAI_TTS_SAMPLE_RATE,
+        client_factory: Callable | None = None,
+        player_factory: Callable | None = None,
+    ) -> None:
+        super().__init__(
+            api_key=api_key, voice_id=voice, model_id=model_id, sample_rate=sample_rate,
+            client_factory=client_factory, player_factory=player_factory,
+        )
+
+    def _build_client(self):
+        if self._client is None:
+            if self._client_factory is not None:
+                self._client = self._client_factory(api_key=self.api_key)
+            else:
+                from openai import DefaultHttpxClient, OpenAI
+                self._http = DefaultHttpxClient()
+                self._client = OpenAI(api_key=self.api_key, timeout=30.0, http_client=self._http)
+        return self._client
+
+    def _generate_response(self, text: str):
+        """Open a streaming speech request; audio arrives while the rest of
+        the sentence is still being synthesized. Caller closes it."""
+        client = self._build_client()
+        return client.audio.speech.with_streaming_response.create(
+            model=self.model_id, voice=self.voice_id, input=text, response_format="pcm",
+        ).__enter__()
+
+    def _play_response(self, text: str, response, cancel: threading.Event) -> None:
+        """Play int16 chunks as they arrive (the ElevenLabs loop, OpenAI's
+        iterator)."""
+        if cancel.is_set():
+            try:
+                response.close()
+            except Exception:
+                pass
+            return
+        audio_stream = None
+        try:
+            play, audio_stream = self._build_player(cancel)
+            self._active_audio_stream = audio_stream
+            self._active_response = response
+            for chunk in response.iter_bytes(4096):
+                if cancel.is_set():
+                    return
+                if not chunk:
+                    continue
+                samples = np.frombuffer(chunk, dtype=np.int16).astype(np.float32) / 32768.0
+                if samples.size == 0:
+                    continue
+                play(samples)
+                if cancel.is_set():
+                    return
+                cb = self._first_chunk_callback
+                if cb is not None:
+                    self._first_chunk_callback = None
+                    try:
+                        cb()
+                    except Exception:
+                        pass
+            if self._player_factory is None:
+                self._output.finish(cancel)
+        except Exception as exc:
+            if cancel.is_set():
+                return
+            self._output.drop()
+            raise RuntimeError(
+                "OpenAI voice playback failed. Diagnostic checklist:\n"
+                "  1. Is the OpenAI key in Settings valid and funded?\n"
+                "  2. Is your internet connection up?\n"
+                f"Underlying error: {type(exc).__name__}: {exc}"
+            ) from exc
+        finally:
+            self._active_audio_stream = None
+            self._active_response = None
+            try:
+                response.close()
+            except Exception:
+                pass
+
+
 # --- Factory: route provider string to the right TTS subclass ----------------
 
 
@@ -1049,9 +1145,11 @@ def create_tts_client(provider: str, api_key: str) -> TTS:
         return ElevenLabsTTS(api_key=api_key)
     if p == "kokoro":
         return KokoroTTS()
+    if p == "openai":
+        return OpenAITTS(api_key=api_key)
     raise ValueError(
         f"Unsupported TTS provider: {provider!r}. "
-        f"Supported: 'cartesia', 'elevenlabs', 'kokoro'. To add a new provider, "
+        f"Supported: 'cartesia', 'elevenlabs', 'openai', 'kokoro'. To add a new provider, "
         f"subclass TTS in tts.py and extend create_tts_client() with a new branch."
     )
 

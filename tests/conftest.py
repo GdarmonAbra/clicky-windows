@@ -1,5 +1,12 @@
 """Shared pytest fixtures."""
+import keyring
 import pytest
+
+# Tests must not see, or write, the developer's own saved settings and keys:
+# config.py resolves them at import. Tests that need a stored value patch the
+# module they test (settings_dialog.keyring, config.keyring) themselves.
+keyring.get_password = lambda *_a, **_k: None
+keyring.set_password = lambda *_a, **_k: None
 
 
 @pytest.fixture(autouse=True)

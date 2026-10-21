@@ -1845,6 +1845,8 @@ def _resolve_tts_credentials() -> tuple[str, str | None]:
     provider = resolve_setting("TTS_PROVIDER", default="cartesia")
     if provider == "kokoro":
         return provider, ""  # local offline TTS, no API key
+    if provider == "openai":
+        return provider, resolve_api_key("OPENAI_API_KEY")
     if provider == "elevenlabs":
         api_key = resolve_api_key("ELEVENLABS_API_KEY")
     else:
@@ -1862,6 +1864,8 @@ def _resolve_stt_credentials() -> tuple[str, str]:
         return "faster-whisper", ""
     if provider == "assemblyai":
         return "assemblyai", resolve_api_key("ASSEMBLYAI_API_KEY") or ""
+    if provider == "openai":
+        return "openai", resolve_api_key("OPENAI_API_KEY") or ""
     return "cartesia", resolve_api_key("CARTESIA_API_KEY") or ""
 
 

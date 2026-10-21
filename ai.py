@@ -259,6 +259,7 @@ _ANTHROPIC_THINKING = {
 }
 _OPENAI_REASONING_EFFORT = {
     "gpt-6-luna": "none",
+    "gpt-6-sol": "low",  # 0.85 s to the first token on Hebrew, 2/2 hits (tools/bench_hebrew.py)
     "gpt-6.1-sol": "low",  # Sol has no "none"
 }
 # Opus 5.5 always thinks; effort is its only dial, and it defaults to medium.

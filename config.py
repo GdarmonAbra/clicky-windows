@@ -94,6 +94,7 @@ _RETIRED_MODEL_DEFAULTS = frozenset({
     "gpt-5.4",
     "google/gemini-3.1-pro-preview",
     "google/gemini-3.5-flash",
+    "gpt-6.1-sol",  # GPT-6 Sol answers in 0.9 s to 6.1's 2.3 s, same hits
 })
 
 
@@ -359,10 +360,36 @@ OLLAMA_MODEL_VISION: str = os.getenv(
 
 # ── OpenAI (vision + GPT-Realtime) ────────────────────────────────────────────
 
-OPENAI_MODEL_VISION: str = resolve_model("OPENAI_MODEL_VISION", "gpt-6.1-sol")
+OPENAI_MODEL_VISION: str = resolve_model("OPENAI_MODEL_VISION", "gpt-6-sol")
 """OpenAI vision model for LLM_PROVIDER='openai', routed by the ``openai/``
 prefix in create_ai_client. Returns a precise [POINT] tag, so the grid
 locator never runs for it."""
+
+OPENAI_STT_MODEL: str = os.getenv(
+    "OPENAI_STT_MODEL", resolve_setting("OPENAI_STT_MODEL", "gpt-4o-transcribe")
+)
+"""OpenAI speech-to-text for STT_PROVIDER='openai'. Measured on Hebrew
+(tools/bench_hebrew.py): gpt-4o-transcribe 0.9 s per clip and the closest
+transcript; gpt-4o-mini-transcribe 0.6 s and nearly as close. Hebrew is not
+in AssemblyAI's streaming languages and Cartesia needs its own key, so this
+is the Hebrew default."""
+
+OPENAI_TTS_MODEL: str = os.getenv(
+    "OPENAI_TTS_MODEL", resolve_setting("OPENAI_TTS_MODEL", "gpt-4o-mini-tts")
+)
+"""OpenAI voice for TTS_PROVIDER='openai'. Speaks Hebrew (Kokoro cannot, and
+ElevenLabs' free plan refuses API use of its voices); first audio about
+1.1 s after a sentence is ready."""
+
+OPENAI_TTS_VOICE: str = os.getenv(
+    "OPENAI_TTS_VOICE", resolve_setting("OPENAI_TTS_VOICE", "cedar")
+)
+"""OpenAI voice name. cedar and marin were the clearest in Hebrew (judged by
+gpt-4o-transcribe: 1.00 against 0.96-0.97 for alloy, nova, shimmer, sage),
+cedar 0.8 s to first audio."""
+
+OPENAI_TTS_SAMPLE_RATE: int = 24_000
+"""OpenAI's pcm output: 24 kHz int16 mono."""
 
 OPENAI_REALTIME_MODEL: str = os.getenv(
     "OPENAI_REALTIME_MODEL",

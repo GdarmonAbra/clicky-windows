@@ -54,6 +54,7 @@ from config import (
     FASTER_WHISPER_DEVICE,
     FASTER_WHISPER_MODEL,
     LANGUAGE,
+    OPENAI_STT_MODEL,
 )
 
 
@@ -1133,6 +1134,79 @@ class FasterWhisperSTT(STT):
         return self.stop_recording()
 
 
+class OpenAISTT(FasterWhisperSTT):
+    """OpenAI transcription (gpt-4o-transcribe) on the buffered utterance.
+
+    Same mic handling as FasterWhisperSTT (buffer while the key is held),
+    but the audio goes to OpenAI as a WAV on release instead of a local
+    model. About 0.9 s from release to transcript; Hebrew and 50+ other
+    languages. Needs OPENAI_API_KEY, the key the OpenAI model already uses.
+    """
+
+    def __init__(
+        self,
+        api_key: str,
+        model: str = OPENAI_STT_MODEL,
+        sample_rate: int = AUDIO_SAMPLE_RATE,
+        chunk_frames: int = AUDIO_CHUNK_FRAMES,
+        client_factory: Optional[Callable[..., object]] = None,
+        audio_stream_factory: Optional[Callable[..., object]] = None,
+        language: str = LANGUAGE,
+    ) -> None:
+        super().__init__(
+            sample_rate=sample_rate, chunk_frames=chunk_frames,
+            model_factory=lambda: None, audio_stream_factory=audio_stream_factory,
+            language=language,
+        )
+        self._api_key = api_key
+        self._stt_model = model
+        self._client_factory = client_factory
+        self._client = None
+
+    def _build_client(self):
+        if self._client is None:
+            if self._client_factory is not None:
+                self._client = self._client_factory(self._api_key)
+            else:
+                from openai import OpenAI
+                self._client = OpenAI(api_key=self._api_key, timeout=30.0)
+        return self._client
+
+    def stop_recording(self) -> str:
+        """Stop buffering, send the utterance as WAV, return the text."""
+        self._recording = False
+        if not self._buffer:
+            return ""
+        import io
+        import wave
+        buf = io.BytesIO()
+        with wave.open(buf, "wb") as w:
+            w.setnchannels(1)
+            w.setsampwidth(2)
+            w.setframerate(self._sample_rate)
+            w.writeframes(bytes(self._buffer))
+        buf.seek(0)
+        buf.name = "utterance.wav"  # the SDK reads the format from the name
+        try:
+            result = self._build_client().audio.transcriptions.create(
+                model=self._stt_model, file=buf, language=self._language,
+            )
+        except Exception as exc:
+            raise RuntimeError(
+                f"OpenAI speech-to-text failed (model={self._stt_model}).\n"
+                f"Original error: {type(exc).__name__}: {exc}\n"
+                "Troubleshooting: check your OpenAI key in Settings and your internet connection."
+            ) from exc
+        text = (getattr(result, "text", None) or "").strip()
+        self._latest_partial = text
+        if self._partial_cb is not None:
+            try:
+                self._partial_cb(text)
+            except Exception:
+                pass
+        return text
+
+
 # --- Factory: route STT_PROVIDER to the right STT subclass -------------------
 
 def create_stt_client(provider: str, api_key: str) -> STT:
@@ -1148,9 +1222,11 @@ def create_stt_client(provider: str, api_key: str) -> STT:
         return AssemblyAIStreamingSTT(api_key=api_key)
     if p in ("faster-whisper", "local"):
         return FasterWhisperSTT()
+    if p == "openai":
+        return OpenAISTT(api_key=api_key)
     raise ValueError(
         f"Unsupported STT provider: {provider!r}. "
-        f"Supported: 'cartesia', 'assemblyai', 'faster-whisper'. To add a new provider, "
+        f"Supported: 'cartesia', 'assemblyai', 'openai', 'faster-whisper'. To add a new provider, "
         f"subclass STT in stt.py and extend create_stt_client() with a branch."
     )
 

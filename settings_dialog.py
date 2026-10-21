@@ -228,6 +228,15 @@ _PROVIDER_CATEGORIES: tuple[_ProviderCategory, ...] = (
                 api_key_env_var="ASSEMBLYAI_API_KEY",
                 signup_url="https://www.assemblyai.com/dashboard/signup",
             ),
+            # OpenAI transcription: Hebrew and 50+ languages on the same key
+            # as the OpenAI model (the row goes keyless when that is chosen).
+            _Provider(
+                provider_id="openai",
+                display_name="OpenAI (gpt-4o-transcribe)",
+                api_key_env_var="OPENAI_API_KEY",
+                signup_url="https://platform.openai.com/api-keys",
+                shares_key_with="LLM",
+            ),
             # Local offline STT (faster-whisper). No API key; model weights
             # download on first use. requires_key=False so Save isn't gated on
             # a credential and the startup modal never forces one.
@@ -257,6 +266,14 @@ _PROVIDER_CATEGORIES: tuple[_ProviderCategory, ...] = (
                 display_name="ElevenLabs",
                 api_key_env_var="ELEVENLABS_API_KEY",
                 signup_url="https://elevenlabs.io/app/sign-up",
+            ),
+            # OpenAI voice: speaks Hebrew, same key as the OpenAI model.
+            _Provider(
+                provider_id="openai",
+                display_name="OpenAI (gpt-4o-mini-tts)",
+                api_key_env_var="OPENAI_API_KEY",
+                signup_url="https://platform.openai.com/api-keys",
+                shares_key_with="LLM",
             ),
             # Local offline TTS (Kokoro-82M). No API key; model files download
             # on first use. requires_key=False (see faster-whisper note).

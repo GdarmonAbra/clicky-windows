@@ -422,3 +422,56 @@ class TestLiveScreen:
             app._stt.stop_recording.return_value = "how do i save"
             app._pipeline_worker("X.EXE", "", threading.Event(), q)
             assert app._step_pending is expected, spoken
+
+
+# --- OpenAI listening and voice (the Hebrew defaults) ------------------------
+
+class TestOpenAIProviders:
+    def test_stt_factory_routes_openai(self):
+        from stt import create_stt_client, OpenAISTT
+        assert isinstance(create_stt_client("openai", "sk-test"), OpenAISTT)
+
+    def test_tts_factory_routes_openai(self):
+        from tts import create_tts_client, OpenAITTS
+        assert isinstance(create_tts_client("openai", "sk-test"), OpenAITTS)
+
+    def test_openai_stt_sends_wav_with_language(self, mocker):
+        from stt import OpenAISTT
+        client = MagicMock()
+        client.audio.transcriptions.create.return_value = MagicMock(text=" שלום עולם ")
+        stt = OpenAISTT(api_key="sk", client_factory=lambda k: client, audio_stream_factory=lambda cb: MagicMock(), language="he")
+        stt.connect(); stt.start_recording()
+        stt._buffer.extend(b"\x00\x01" * 1600)
+        assert stt.stop_recording() == "שלום עולם"
+        kwargs = client.audio.transcriptions.create.call_args.kwargs
+        assert kwargs["language"] == "he" and kwargs["model"] == "gpt-4o-transcribe"
+        assert kwargs["file"].read(4) == b"RIFF"
+
+    def test_openai_stt_empty_buffer_is_silent(self):
+        from stt import OpenAISTT
+        stt = OpenAISTT(api_key="sk", client_factory=lambda k: MagicMock(), audio_stream_factory=lambda cb: MagicMock())
+        stt.connect(); stt.start_recording()
+        assert stt.stop_recording() == ""
+
+    def test_openai_tts_streams_pcm_and_plays_float32(self):
+        import numpy as np
+        from tts import OpenAITTS
+        resp = MagicMock()
+        resp.iter_bytes.return_value = iter([np.array([0, 16384, -16384], dtype=np.int16).tobytes()])
+        client = MagicMock()
+        client.audio.speech.with_streaming_response.create.return_value.__enter__ = MagicMock(return_value=resp)
+        played = []
+        tts = OpenAITTS(api_key="sk", client_factory=lambda api_key: client, player_factory=lambda sample_rate: (played.append, None))
+        tts.speak("שלום")
+        tts._current_thread.join(3)
+        kwargs = client.audio.speech.with_streaming_response.create.call_args.kwargs
+        assert kwargs["model"] == "gpt-4o-mini-tts" and kwargs["response_format"] == "pcm" and kwargs["input"] == "שלום"
+        assert len(played) == 1 and played[0].dtype == np.float32 and abs(played[0][1] - 0.5) < 1e-6
+        resp.close.assert_called()
+
+    def test_credentials_for_openai_speech_use_the_openai_key(self, mocker):
+        import app
+        mocker.patch("app.resolve_setting", side_effect=lambda n, default=None: "openai")
+        mocker.patch("app.resolve_api_key", side_effect=lambda n: "sk-x" if n == "OPENAI_API_KEY" else None)
+        assert app._resolve_tts_credentials() == ("openai", "sk-x")
+        assert app._resolve_stt_credentials() == ("openai", "sk-x")
