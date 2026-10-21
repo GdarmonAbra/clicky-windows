@@ -210,7 +210,7 @@ Listening and voice run fine on a normal CPU. The AI model wants a strong GPU: w
 <details>
 <summary><strong>Which AI model should I pick?</strong></summary>
 
-All three hit every pointing target in the test above, so the difference is speed and reasoning. GPT-6.1 Sol is the default: with an OpenAI key it usually starts answering in about 2 seconds, and it got 5 of 6 reasoning checks right, like spotting the mistake in a worked solution. Claude Haiku 5.5 is the cheapest, about $0.0004 a question, and the fastest through an OpenRouter key, but got 3 of 6. Gemini 4 Argon got all 6 and is the slowest to start. One OpenRouter key works for all three.
+All three hit every pointing target in the test above, so the difference is speed and reasoning. GPT-6 Sol is the default: with an OpenAI key it starts answering in about a second (`tools/bench_hebrew.py` measured 0.9 s against 2.3 s for GPT-6.1 Sol, with the same pointing hits). GPT-6.1 Sol, set with `OPENAI_MODEL_VISION`, usually starts in about 2 seconds, and it got 5 of 6 reasoning checks right, like spotting the mistake in a worked solution. Claude Haiku 5.5 is the cheapest, about $0.0004 a question, and the fastest through an OpenRouter key, but got 3 of 6. Gemini 4 Argon got all 6 and is the slowest to start. One OpenRouter key works for all three.
 
 </details>
 

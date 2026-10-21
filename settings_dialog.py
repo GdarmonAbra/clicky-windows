@@ -145,7 +145,7 @@ _PROVIDER_CATEGORIES: tuple[_ProviderCategory, ...] = (
         category_key="LLM",
         label="AI model",
         providers=(
-            # First, so it is the default: GPT-6.1 Sol was the fastest to its
+            # First, so it is the default: GPT-6 Sol was the fastest to its
             # first word in testing and points as accurately as the others.
             # No model sub-pickers on the cloud providers: one default each,
             # with an env var (OPENAI_MODEL_VISION, ANTHROPIC_MODEL) to override.

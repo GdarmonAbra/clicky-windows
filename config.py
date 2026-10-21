@@ -228,7 +228,7 @@ natural for a conversational voice without oversampling cost."""
 
 def default_llm_provider() -> str:
     """AI provider when none has been chosen: the first one there is a key
-    for, so an existing setup keeps working, else OpenAI (GPT-6.1 Sol, the
+    for, so an existing setup keeps working, else OpenAI (GPT-6 Sol, the
     fastest to its first word in testing). A MODEL_ID override keeps the path
     that honours it."""
     if os.getenv("MODEL_ID"):
