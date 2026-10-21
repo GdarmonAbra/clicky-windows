@@ -129,10 +129,15 @@ _CONFIRM_WORDS = frozenset({
 next", "done", "הבא", "סיימתי") means "I did the step" (or "go ahead" for a
 pending action), the same as Ctrl+Alt+Enter."""
 
-_MAX_AUTO_TURNS = 8
+_MAX_AUTO_TURNS = 30
 """How many follow-up turns Clicky chains on its own in 'auto' actions mode
 before it waits for the user again. Each auto-run action is followed by a new
-turn so the model sees the result; this stops a model that never says [DONE]."""
+turn so the model sees the result; opening a site and finding something on
+it takes a handful. This stops a model that never says [DONE]."""
+
+_ACTION_SETTLE_S = 1.5
+"""Pause after actions before the next screenshot, so an app or page that an
+action opened has drawn by the time the model looks."""
 
 
 def _is_confirmation(transcript: str) -> bool:
@@ -978,7 +983,10 @@ class ClickyApp(QObject):
                 monitor_left=capture.monitor["left"], monitor_top=capture.monitor["top"],
                 target_w=capture.target_width, target_h=capture.target_height,
             )
-        return user_actions.execute(pending, to_physical, log=_log)
+        results = user_actions.execute(pending, to_physical, log=_log)
+        if results:
+            threading.Event().wait(_ACTION_SETTLE_S)
+        return results
 
     def _spawn_pipeline(self, transcript: str | None) -> None:
         """Start the capture worker and the pipeline worker for one turn. With

@@ -7,6 +7,7 @@ in the same spirit as the [POINT] cursor tag and the draw-on-screen shapes:
     [TYPE:text]             type text into the focused control
     [KEYS:ctrl+shift+s]     press a key combination
     [POWERSHELL:command]    run a PowerShell command, output goes back to the model
+    [OPEN:target]           open an app ("notepad", "chrome"), a file, or a URL
 
 Guided steps (STEP_MODE) use two more tags, with no payload:
 
@@ -48,7 +49,12 @@ class PowerShell:
     command: str
 
 
-Action = Click | Type | Keys | PowerShell
+@dataclass(frozen=True)
+class Open:
+    target: str
+
+
+Action = Click | Type | Keys | PowerShell | Open
 
 # Case-insensitive like the shape tags: the prompt asks for lowercase prose, so
 # `[click:...]` must parse and strip too. TYPE and POWERSHELL payloads may hold
@@ -58,14 +64,15 @@ _CLICK_RE = re.compile(r"\[\s*CLICK\s*:\s*(\d+)\s*,\s*(\d+)\s*\]", re.IGNORECASE
 _KEYS_RE = re.compile(r"\[\s*KEYS\s*:\s*([^\]]+?)\s*\]", re.IGNORECASE)
 _TYPE_RE = re.compile(r"\[\s*TYPE\s*:(.*?)\](?=\s*(?:\[|$))", re.IGNORECASE | re.DOTALL)
 _POWERSHELL_RE = re.compile(r"\[\s*POWERSHELL\s*:(.*?)\](?=\s*(?:\[|$))", re.IGNORECASE | re.DOTALL)
+_OPEN_RE = re.compile(r"\[\s*OPEN\s*:(.*?)\](?=\s*(?:\[|$))", re.IGNORECASE | re.DOTALL)
 _ANY_ACTION_RE = re.compile(
-    r"\[\s*(?:CLICK|KEYS)\s*:[^\]]*\]|\[\s*(?:TYPE|POWERSHELL)\s*:.*?\](?=\s*(?:\[|$))",
+    r"\[\s*(?:CLICK|KEYS)\s*:[^\]]*\]|\[\s*(?:TYPE|POWERSHELL|OPEN)\s*:.*?\](?=\s*(?:\[|$))",
     re.IGNORECASE | re.DOTALL,
 )
 # An action tag the stream cut off: strip it and everything after, like the
 # shape parser does, so no half-tag is ever spoken.
 _UNTERMINATED_ACTION_RE = re.compile(
-    r"\[\s*(?:CLICK|KEYS|TYPE|POWERSHELL)\s*:.*$", re.IGNORECASE | re.DOTALL
+    r"\[\s*(?:CLICK|KEYS|TYPE|POWERSHELL|OPEN)\s*:.*$", re.IGNORECASE | re.DOTALL
 )
 _STEP_RE = re.compile(r"\[\s*(STEP|DONE)\s*\]", re.IGNORECASE)
 
@@ -88,6 +95,10 @@ def parse_actions(text: str) -> tuple[str, list[Action]]:
         command = m.group(1).strip()
         if command:
             found.append((m.start(), PowerShell(command)))
+    for m in _OPEN_RE.finditer(text):
+        target = m.group(1).strip()
+        if target:
+            found.append((m.start(), Open(target)))
     found.sort(key=lambda item: item[0])
     stripped = _ANY_ACTION_RE.sub("", text)
     stripped = _UNTERMINATED_ACTION_RE.sub("", stripped)
@@ -121,6 +132,8 @@ def describe(action: Action) -> str:
         return f"type {action.text!r}"
     if isinstance(action, Keys):
         return f"press {action.combo}"
+    if isinstance(action, Open):
+        return f"open {action.target}"
     return f"powershell: {action.command}"
 
 
@@ -217,6 +230,28 @@ def run_powershell(command: str, runner=subprocess.run) -> str:
     return text
 
 
+def open_target(target: str, startfile=None, popen=None) -> None:
+    """Open an app, a file or a web address the way the Start menu or a
+    double-click would. os.startfile handles paths and URLs (the default
+    browser); an app name such as "notepad" or "chrome" goes through
+    `start`, which also looks it up in the registry's App Paths."""
+    import os
+    startfile = startfile or os.startfile
+    popen = popen or subprocess.Popen
+    try:
+        startfile(target)
+        return
+    except OSError:
+        pass
+    flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+    proc = popen(["cmd", "/c", "start", "", target], creationflags=flags)
+    try:
+        if proc.wait(timeout=5) != 0:
+            raise RuntimeError(f"could not open {target!r}")
+    except subprocess.TimeoutExpired:
+        pass  # start returned the console but the app is still launching
+
+
 def execute(
     actions: list[Action],
     to_physical: Callable[[int, int], tuple[int, int]],
@@ -226,6 +261,7 @@ def execute(
     typer=None,
     presser=None,
     shell=None,
+    opener=None,
 ) -> list[str]:
     """Run actions in order and return one result line per action. A failing
     action is reported and the rest still run; the model gets the lines.
@@ -235,6 +271,7 @@ def execute(
     typer = typer or type_text
     presser = presser or press_keys
     shell = shell or run_powershell
+    opener = opener or open_target
     results: list[str] = []
     for action in actions:
         what = describe(action)
@@ -248,6 +285,9 @@ def execute(
                 results.append(f"{what}: done")
             elif isinstance(action, Keys):
                 presser(action.combo)
+                results.append(f"{what}: done")
+            elif isinstance(action, Open):
+                opener(action.target)
                 results.append(f"{what}: done")
             else:
                 output = shell(action.command)

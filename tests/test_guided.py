@@ -63,7 +63,8 @@ class TestBuildSystemPrompt:
         confirm = build_system_prompt(actions_mode="confirm")
         auto = build_system_prompt(actions_mode="auto")
         for p in (confirm, auto):
-            assert "[CLICK:x,y]" in p and "[POWERSHELL:command]" in p
+            assert "[CLICK:x,y]" in p and "[POWERSHELL:command]" in p and "[OPEN:target]" in p
+            assert "new screenshot of all the user's screens" in p
         assert "nothing runs until the user presses control alt enter" in confirm
         assert "run as soon as you have answered" in auto
         assert build_system_prompt(actions_mode="off") == build_system_prompt()
@@ -134,6 +135,10 @@ class TestConfirmation:
 
 
 class TestConfirmFlow:
+    @pytest.fixture(autouse=True)
+    def _no_settle(self, mocker):
+        mocker.patch("app._ACTION_SETTLE_S", 0)
+
     def _make_app(self, mocker):
         from app import ClickyApp
         return ClickyApp(

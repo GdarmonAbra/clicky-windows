@@ -161,3 +161,45 @@ class TestRunPowershell:
         runner = MagicMock(return_value=MagicMock(stdout="x" * 5000, stderr="", returncode=0))
         out = run_powershell("x", runner=runner)
         assert out.endswith("(cut)") and len(out) < _PS_OUTPUT_MAX + 20
+
+
+class TestOpen:
+    def test_parses_open_app_and_url(self):
+        from actions import parse_actions, Open
+        spoken, acts = parse_actions("opening it. [OPEN:notepad][OPEN:https://example.com/a?b=[1]] [STEP]")
+        assert acts == [Open("notepad"), Open("https://example.com/a?b=[1]")]
+        assert spoken == "opening it. [STEP]"
+
+    def test_execute_calls_opener(self):
+        from actions import execute, Open
+        opener = MagicMock()
+        results = execute([Open("chrome")], to_physical=lambda x, y: (x, y), opener=opener)
+        opener.assert_called_once_with("chrome")
+        assert results == ["open chrome: done"]
+
+    def test_open_target_uses_startfile_first(self):
+        from actions import open_target
+        startfile, popen = MagicMock(), MagicMock()
+        open_target("https://example.com", startfile=startfile, popen=popen)
+        startfile.assert_called_once_with("https://example.com")
+        popen.assert_not_called()
+
+    def test_open_target_falls_back_to_start_for_app_names(self):
+        from actions import open_target
+        startfile = MagicMock(side_effect=OSError("not found"))
+        popen = MagicMock()
+        popen.return_value.wait.return_value = 0
+        open_target("notepad", startfile=startfile, popen=popen)
+        assert popen.call_args.args[0] == ["cmd", "/c", "start", "", "notepad"]
+
+    def test_open_target_reports_failure(self):
+        from actions import open_target
+        startfile = MagicMock(side_effect=OSError("not found"))
+        popen = MagicMock()
+        popen.return_value.wait.return_value = 1
+        with pytest.raises(RuntimeError):
+            open_target("nosuchapp", startfile=startfile, popen=popen)
+
+    def test_auto_mode_runs_open_without_asking(self):
+        from actions import needs_confirmation, Open
+        assert needs_confirmation([Open("chrome")], "auto") is False
