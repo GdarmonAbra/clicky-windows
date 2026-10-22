@@ -44,7 +44,7 @@ class TestClickyTrayMenu:
             "Settings...",
             "Open Knowledge Folder",
             "Open Memory Folder",
-            "Quit Clicky",
+            "Quit ClickFixAI",
         ]
 
     def test_quit_action_triggers_on_quit_callback(self, qapp, mocker):
@@ -54,7 +54,7 @@ class TestClickyTrayMenu:
         t = ClickyTray(on_quit=on_quit, on_settings=on_settings)
 
         quit_action = next(
-            a for a in t._menu.actions() if a.text() == "Quit Clicky"
+            a for a in t._menu.actions() if a.text() == "Quit ClickFixAI"
         )
         quit_action.trigger()
         on_quit.assert_called_once()

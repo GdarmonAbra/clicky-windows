@@ -59,7 +59,7 @@ _LANGUAGES: tuple[tuple[str, str], ...] = (("English", "en"), ("עברית (Hebr
 
 # Acting on the user's behalf, as (label, ACTIONS_MODE value).
 _ACTIONS_MODES: tuple[tuple[str, str], ...] = (
-    ("Off: Clicky only points", "off"),
+    ("Off: ClickFixAI only points", "off"),
     ("Ask first: act when I press Ctrl+Alt+Enter", "confirm"),
     ("Automatic: click and type right away (PowerShell still asks)", "auto"),
 )
@@ -314,7 +314,7 @@ class SettingsDialog(QDialog):
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
-        self.setWindowTitle("Clicky Settings")
+        self.setWindowTitle("ClickFixAI Settings")
         self.setModal(True)
         self.setMinimumWidth(520)
         # Use the tray icon as the window icon for visual consistency.
@@ -370,7 +370,7 @@ class SettingsDialog(QDialog):
         # defensive.
         privacy = QLabel(
             "🔒 Keys stored locally, encrypted by Windows Credential Manager. "
-            "Your screen, your voice and Clicky's notes for the current app go to the providers you pick below."
+            "Your screen, your voice and ClickFixAI's notes for the current app go to the providers you pick below."
         )
         privacy.setWordWrap(True)
         privacy.setStyleSheet("color: gray; padding-bottom: 4px;")
@@ -433,7 +433,7 @@ class SettingsDialog(QDialog):
         actions_layout.addWidget(self._actions_combo, stretch=1)
         outer.addWidget(actions_row)
         actions_note = QLabel(
-            "When on, Clicky can click, type, press keys and run PowerShell commands "
+            "When on, ClickFixAI can click, type, press keys and run PowerShell commands "
             "you ask for. A PowerShell command always waits for Ctrl+Alt+Enter."
         )
         actions_note.setWordWrap(True)

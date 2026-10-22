@@ -1,11 +1,11 @@
 <p align="center">
-  <img src="assets/clicky-logo.png" alt="Clicky Windows" width="180" />
+  <img src="assets/clicky-logo.png" alt="ClickFixAI" width="180" />
 </p>
 
-<h1 align="center">Clicky Windows</h1>
+<h1 align="center">ClickFixAI</h1>
 
 <p align="center">
-  An AI that lives next to your cursor on Windows. Hold a hotkey, ask about whatever app you're in, and Clicky answers out loud and points at the spot on your screen. It points, you click.
+  An AI that lives next to your cursor on Windows. Hold a hotkey, ask about whatever app you're in, and ClickFixAI answers out loud, points at the spot on your screen, and can do the step for you when you ask. Built on Clicky Windows.
 </p>
 
 <p align="center">

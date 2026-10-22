@@ -65,7 +65,7 @@ class ClickyTray(QObject):
         if not QSystemTrayIcon.isSystemTrayAvailable():
             raise RuntimeError(
                 "System tray is not available on this Windows "
-                "configuration. Clicky needs the system tray to "
+                "configuration. ClickFixAI needs the system tray to "
                 "provide its quit menu and settings access. Check "
                 "Windows taskbar settings (Settings -> "
                 "Personalisation -> Taskbar -> Other system tray "
@@ -76,7 +76,7 @@ class ClickyTray(QObject):
         self._on_settings = on_settings
 
         self._icon = QSystemTrayIcon(parent=self)
-        self._icon.setToolTip("Clicky: hold Ctrl+Alt+Space and ask")
+        self._icon.setToolTip("ClickFixAI: hold Ctrl+Alt+Space and ask")
         icon_path = Path(__file__).parent / "assets" / "clicky_tray.ico"
         if icon_path.is_file():
             self._icon.setIcon(QIcon(str(icon_path)))
@@ -103,7 +103,7 @@ class ClickyTray(QObject):
 
         self._menu.addSeparator()
 
-        act_quit = QAction("Quit Clicky", self)
+        act_quit = QAction("Quit ClickFixAI", self)
         act_quit.triggered.connect(self._on_quit)
         self._menu.addAction(act_quit)
 
@@ -122,7 +122,7 @@ class ClickyTray(QObject):
 
     def notify(self, message: str) -> None:
         """Show a short balloon from the tray icon."""
-        self._icon.showMessage("Clicky", message, QSystemTrayIcon.MessageIcon.Warning, 8000)
+        self._icon.showMessage("ClickFixAI", message, QSystemTrayIcon.MessageIcon.Warning, 8000)
 
     def _open_kb_folder(self) -> None:
         self._open_in_explorer(KB_DIR)

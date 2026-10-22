@@ -414,7 +414,7 @@ def _friendly_error(stage: str, exc: BaseException) -> str:
     text = " ".join(str(x) for x in chain).lower()
     names = " ".join(type(x).__name__ for x in chain)
     if status in (401, 403) or any(t in text for t in ("invalid x-api-key", "invalid api key", "incorrect api key", "unauthorized")):
-        return f"Your {stage} key was rejected. Right-click the Clicky tray icon, open Settings, and paste it again."
+        return f"Your {stage} key was rejected. Right-click the ClickFixAI tray icon, open Settings, and paste it again."
     # An empty balance can arrive as 402, 400 or 429 (OpenAI's insufficient_quota),
     # so billing words decide it; a bare "quota" is a temporary per-minute limit.
     if status == 402 or any(t in text for t in (
@@ -1677,7 +1677,7 @@ _T0 = __import__("time").time()
 # process lifetime; second instance sees ERROR_ALREADY_EXISTS and exits.
 # Same pattern Spotify, Slack, Discord, Raycast all use.
 
-_MUTEX_NAME = "Local\\ClickyWindows-SingleInstance-v1"
+_MUTEX_NAME = "Local\\ClickFixAI-SingleInstance-v1"
 """Per-logon-session namespace (Local\\): admin and non-admin in the same
 session see the same mutex (correct), but different Windows users on the
 same machine each get their own Clicky (also correct). Global\\ would
@@ -1997,18 +1997,18 @@ if __name__ == "__main__":
         # cleanly. MB_ICONINFORMATION = 0x40.
         ctypes.windll.user32.MessageBoxW(
             None,
-            "Clicky Windows is already running.\n\n"
+            "ClickFixAI is already running.\n\n"
             "Look for the blue cursor icon in your system tray "
             "(bottom-right corner of your screen). Right-click it "
             "for the Settings and Quit menu.",
-            "Clicky already running",
+            "ClickFixAI already running",
             0x40,
         )
         sys.exit(0)
     # _mutex_handle == "fail-open" or a real handle: proceed with startup.
 
     print("=" * 70)
-    print("Clicky Windows: hold Ctrl+Alt+Space and ask")
+    print("ClickFixAI: hold Ctrl+Alt+Space and ask")
     print("=" * 70)
 
     set_dpi_awareness()
@@ -2064,7 +2064,7 @@ if __name__ == "__main__":
     if tts_provider != "kokoro" and not tts_api_key:
         ctypes.windll.user32.MessageBoxW(
             None,
-            f"Clicky needs an API key for {tts_provider.title()} TTS.\n\n"
+            f"ClickFixAI needs an API key for {tts_provider.title()} TTS.\n\n"
             "Right-click the tray icon → Settings... to set it.",
             f"{tts_provider.title()} key missing",
             0x40,
@@ -2080,7 +2080,7 @@ if __name__ == "__main__":
         # bundled-EXE void.
         ctypes.windll.user32.MessageBoxW(
             None,
-            f"Clicky's TTS configuration is invalid: {exc}\n\n"
+            f"ClickFixAI's TTS configuration is invalid: {exc}\n\n"
             "Right-click the tray icon → Settings... to choose a "
             "supported provider.",
             "TTS provider not supported",
@@ -2132,7 +2132,7 @@ if __name__ == "__main__":
             try:
                 ctypes.windll.user32.MessageBoxW(
                     None,
-                    "Clicky's speech-to-text provider failed to start:\n\n"
+                    "ClickFixAI's speech-to-text provider failed to start:\n\n"
                     f"{exc}\n\n"
                     "Right-click the Clicky tray icon and open Settings to switch "
                     "to a different provider (for example AssemblyAI cloud), then "
@@ -2169,10 +2169,10 @@ if __name__ == "__main__":
         # sometimes fails.
         ctypes.windll.user32.MessageBoxW(
             None,
-            "Settings saved.\n\nClicky will now close so your change can take "
+            "Settings saved.\n\nClickFixAI will now close so your change can take "
             "effect. Reopen it from the Start Menu (or your desktop shortcut) "
             "to continue.",
-            "Clicky - reopen to apply",
+            "ClickFixAI - reopen to apply",
             0x40,  # MB_ICONINFORMATION (OK only)
         )
         clicky.stop()
@@ -2190,7 +2190,7 @@ if __name__ == "__main__":
     except RuntimeError as exc:
         from PyQt6.QtWidgets import QMessageBox
         QMessageBox.critical(
-            None, "Clicky Windows -- Tray Error", str(exc)
+            None, "ClickFixAI -- Tray Error", str(exc)
         )
         clicky.stop()
         sys.exit(1)

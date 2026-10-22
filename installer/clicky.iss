@@ -12,11 +12,11 @@
 ;
 ; Inno Setup 6+ required: https://jrsoftware.org/isdl.php (free).
 
-#define AppName "Clicky Windows"
+#define AppName "ClickFixAI"
 #define AppVersion "0.5.2"
 #define AppPublisher "Abhishek Vulla"
 #define AppURL "https://github.com/AbhishekVulla/clicky-windows"
-#define AppExeName "Clicky.exe"
+#define AppExeName "ClickFixAI.exe"
 
 [Setup]
 AppId={{C9A8F1B3-7D2E-4A6F-9E8C-3B1D5F2A4C8D}
@@ -37,7 +37,7 @@ OutputDir=Output
 ; so a stable name keeps the README's download link working across releases.
 ; The version still shows on the release page, in the installer metadata and
 ; in Add or Remove Programs.
-OutputBaseFilename=Clicky-Windows-Setup
+OutputBaseFilename=ClickFixAI-Setup
 Compression=lzma2
 SolidCompression=yes
 WizardStyle=modern
@@ -59,7 +59,7 @@ Name: "desktopicon"; Description: "Create a &desktop shortcut"; GroupDescription
 [Files]
 ; Bundle the entire PyInstaller --onedir output. recursesubdirs grabs
 ; the _internal/ tree (Qt plugins, Python stdlib, all bundled deps).
-Source: "..\dist\Clicky\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "..\dist\ClickFixAI\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Icons]
 Name: "{group}\{#AppName}"; Filename: "{app}\{#AppExeName}"
